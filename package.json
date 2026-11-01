@@ -1,0 +1,29 @@
+{
+  "name": "tree-garden",
+  "version": "0.0.0",
+  "description": "Interactive showcase of algorithms that grow literal trees",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "type": "module",
+  "dependencies": {
+    "@effect/platform-browser": "4.1.1",
+    "effect": "4.1.1",
+    "foldkit": "0.170.0"
+  },
+  "devDependencies": {
+    "@foldkit/devtools": "0.170.0",
+    "@foldkit/vite-plugin": "0.29.0",
+    "@tailwindcss/vite": "4.3.3",
+    "happy-dom": "21.0.4",
+    "tailwindcss": "4.3.3",
+    "typescript": "7.0.2",
+    "vite": "8.3.5",
+    "vitest": "5.0.5"
+  },
+  "private": true
+}

@@ -1,0 +1,441 @@
+@import 'tailwindcss';
+
+/*
+ * Ink on paper. Strictly monochrome: one ink, one paper, and greys mixed
+ * between them. The light theme is a print on warm off-white stock; the
+ * dark theme inverts it to pale ink on charcoal. The plate's canvas reads
+ * --plate-* back, so the painting always matches the page.
+ */
+
+:root {
+  color-scheme: light;
+  --page: #f6f5f1;
+  --ink: #161513;
+  --ink-2: #4b4944;
+  --ink-3: #807c74;
+  --rule: #dedad1;
+  --rule-strong: #b8b3a8;
+  --field: #fbfaf7;
+  --plate-paper: #f2efe8;
+  --plate-ink: #141311;
+  --plate-highlight: #fdfcf9;
+  --plate-mark: rgb(22 21 19 / 0.32);
+  --sheet-shadow: 0 1px 1px rgb(22 21 19 / 0.05), 0 22px 40px -28px rgb(22 21 19 / 0.45);
+  /* The plate mark's inset. <tree-canvas> reads these too: it clips the
+     painting to the mark, so keep them plain px values. */
+  --plate-mark-top: 14px;
+  --plate-mark-side: 14px;
+  --plate-mark-bottom: 38px;
+  /* The gap in the mark's top edge that holds the zoom cartouche: its
+     distance from the mark's right corner, its width, and how far the
+     cartouche reaches below the line (the canvas keeps ink out of it). */
+  --plate-gap-right: 16px;
+  --plate-gap-width: 150px;
+  --plate-gap-depth: 12px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #0e0e0d;
+    --ink: #ecebe6;
+    --ink-2: #b4b1aa;
+    --ink-3: #85827b;
+    --rule: #2a2927;
+    --rule-strong: #47453f;
+    --field: #141413;
+    --plate-paper: #161615;
+    --plate-ink: #ebe8e1;
+    --plate-highlight: #2a2927;
+    --plate-mark: rgb(236 235 230 / 0.2);
+    --sheet-shadow: 0 0 0 1px rgb(236 235 230 / 0.06), 0 26px 50px -30px rgb(0 0 0 / 0.9);
+  }
+}
+
+@theme {
+  --font-serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', 'URW Palladio L', Georgia, serif;
+  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+}
+
+@theme inline {
+  --color-page: var(--page);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-rule: var(--rule);
+  --color-rule-strong: var(--rule-strong);
+  --color-field: var(--field);
+  --color-plate: var(--plate-paper);
+}
+
+html {
+  background: var(--page);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--ink);
+  color: var(--page);
+}
+
+/* Focus is always a ring of ink, offset from the control. */
+:where(button, select, input, textarea, summary, a):focus-visible {
+  outline: 1.5px solid var(--ink);
+  outline-offset: 3px;
+}
+
+@layer components {
+  /* SMALL CAPITALS: section heads and quiet labels. */
+  .caps {
+    font-family: var(--font-sans);
+    font-size: 10.5px;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+
+  /* SECTION HEAD: small capitals followed by a hairline to the edge. */
+  .section-head {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .section-head::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--rule);
+  }
+
+  /* FIELDS */
+  .field {
+    width: 100%;
+    border: 1px solid var(--rule-strong);
+    border-radius: 2px;
+    background: var(--field);
+    color: var(--ink);
+    padding: 0.5rem 0.65rem;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.6;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+  }
+  .field:hover {
+    border-color: var(--ink-3);
+  }
+  .field:focus {
+    outline: none;
+    border-color: var(--ink);
+    box-shadow: 0 0 0 1px var(--ink);
+  }
+  /* A rule that doesn't parse: a heavier ink border, no colour needed. */
+  .field[aria-invalid='true'] {
+    border-color: var(--ink);
+    border-width: 1px 1px 1px 3px;
+    padding-left: calc(0.65rem - 2px);
+  }
+  textarea.field {
+    resize: vertical;
+    min-height: 7.5rem;
+  }
+
+  select.field {
+    appearance: none;
+    font-family: var(--font-serif);
+    font-size: 15px;
+    padding-right: 2rem;
+    cursor: pointer;
+    /* A small chevron drawn with two gradients, so it follows the ink. */
+    background-image:
+      linear-gradient(45deg, transparent 50%, var(--ink-2) 50%),
+      linear-gradient(135deg, var(--ink-2) 50%, transparent 50%);
+    background-position:
+      calc(100% - 15px) 52%,
+      calc(100% - 10.5px) 52%;
+    background-size: 4.5px 4.5px;
+    background-repeat: no-repeat;
+  }
+  select.field option {
+    font-family: var(--font-sans);
+  }
+
+  /* RANGE: a hairline track and a small ink bead. */
+  .range {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 100%;
+    height: 20px;
+    background: transparent;
+    cursor: pointer;
+    margin: 0;
+  }
+  .range:focus {
+    outline: none;
+  }
+  .range::-webkit-slider-runnable-track {
+    height: 1px;
+    background: var(--rule-strong);
+  }
+  .range::-moz-range-track {
+    height: 1px;
+    background: var(--rule-strong);
+  }
+  .range::-moz-range-progress {
+    height: 1px;
+    background: var(--ink);
+  }
+  .range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 13px;
+    height: 13px;
+    margin-top: -6px;
+    border-radius: 50%;
+    background: var(--ink);
+    border: 2.5px solid var(--page);
+    box-shadow: 0 0 0 1px var(--ink);
+    transition: transform 120ms ease;
+  }
+  .range::-moz-range-thumb {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--ink);
+    border: 2.5px solid var(--page);
+    box-shadow: 0 0 0 1px var(--ink);
+    transition: transform 120ms ease;
+  }
+  .range:hover::-webkit-slider-thumb,
+  .range:active::-webkit-slider-thumb {
+    transform: scale(1.18);
+  }
+  .range:hover::-moz-range-thumb,
+  .range:active::-moz-range-thumb {
+    transform: scale(1.18);
+  }
+  .range:focus-visible::-webkit-slider-thumb {
+    box-shadow: 0 0 0 1px var(--ink), 0 0 0 4px var(--page), 0 0 0 5.5px var(--ink);
+  }
+  .range:focus-visible::-moz-range-thumb {
+    box-shadow: 0 0 0 1px var(--ink), 0 0 0 4px var(--page), 0 0 0 5.5px var(--ink);
+  }
+
+  /* BUTTONS */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    height: 2.125rem;
+    padding: 0 0.9rem;
+    border: 1px solid var(--rule-strong);
+    border-radius: 2px;
+    background: transparent;
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: border-color 120ms ease, background-color 120ms ease, color 120ms ease;
+  }
+  .btn:hover {
+    border-color: var(--ink);
+  }
+  .btn:active {
+    background: color-mix(in srgb, var(--ink) 6%, transparent);
+  }
+  .btn:disabled {
+    color: var(--ink-3);
+    border-color: var(--rule);
+    background: transparent;
+    cursor: default;
+  }
+  .btn[aria-busy='true'] {
+    cursor: progress;
+  }
+  .btn-solid {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: var(--page);
+  }
+  .btn-solid:hover {
+    background: color-mix(in srgb, var(--ink) 86%, var(--page));
+  }
+  .btn-solid:active {
+    background: color-mix(in srgb, var(--ink) 78%, var(--page));
+  }
+
+  /* SEGMENTED CONTROL: the chosen option is filled with ink. */
+  .segmented {
+    display: inline-flex;
+    border: 1px solid var(--rule-strong);
+    border-radius: 2px;
+    padding: 2px;
+    gap: 2px;
+  }
+  .segmented > button {
+    height: 1.75rem;
+    padding: 0 0.7rem;
+    border-radius: 1px;
+    font-family: var(--font-sans);
+    font-size: 12.5px;
+    color: var(--ink-2);
+    cursor: pointer;
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+  .segmented > button:hover {
+    color: var(--ink);
+    background: color-mix(in srgb, var(--ink) 6%, transparent);
+  }
+  .segmented > button[aria-pressed='true'] {
+    background: var(--ink);
+    color: var(--page);
+  }
+
+  /* THE SHEET: paper lifted off the page, with an etcher's plate mark. */
+  .sheet {
+    position: relative;
+    background: var(--plate-paper);
+    box-shadow: var(--sheet-shadow);
+  }
+  .plate-mark {
+    position: absolute;
+    inset: var(--plate-mark-top) var(--plate-mark-side) var(--plate-mark-bottom);
+    border: 1px solid var(--plate-mark);
+    pointer-events: none;
+    --top-left: calc(100% - var(--plate-gap-right) - var(--plate-gap-width));
+    -webkit-mask:
+      linear-gradient(#000 0 0) left top / var(--top-left) 2px no-repeat,
+      linear-gradient(#000 0 0) right top / var(--plate-gap-right) 2px no-repeat,
+      linear-gradient(#000 0 0) left bottom / 100% calc(100% - 2px) no-repeat;
+    mask:
+      linear-gradient(#000 0 0) left top / var(--top-left) 2px no-repeat,
+      linear-gradient(#000 0 0) right top / var(--plate-gap-right) 2px no-repeat,
+      linear-gradient(#000 0 0) left bottom / 100% calc(100% - 2px) no-repeat;
+  }
+
+  /* THE PLATE ITSELF: focusable, draggable once zoomed (the element sets
+     the cursor and touch-action as the zoom changes). */
+  tree-canvas {
+    display: block;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: pan-y;
+    outline: none;
+  }
+  tree-canvas:focus-visible {
+    outline: 1.5px solid var(--ink);
+    outline-offset: 3px;
+  }
+
+  /* ZOOM CARTOUCHE: − 100% + | FIT, set into the gap in the plate mark's
+     top edge, in the same pencil as the inscriptions. */
+  .zoom {
+    --pencil: color-mix(in srgb, var(--plate-ink) 55%, var(--plate-paper));
+    position: absolute;
+    top: calc(var(--plate-mark-top) - 10.5px);
+    right: calc(var(--plate-mark-side) + var(--plate-gap-right) + 8px);
+    height: 22px;
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    color: var(--pencil);
+  }
+  .zoom-button {
+    position: relative;
+    display: inline-grid;
+    place-items: center;
+    height: 22px;
+    min-width: 22px;
+    padding: 0 4px;
+    border-radius: 2px;
+    color: inherit;
+    font-family: var(--font-sans);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-indent: 0.16em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: color 120ms ease, background-color 120ms ease;
+  }
+  .zoom-button:hover:not(:disabled) {
+    color: var(--plate-ink);
+    background: color-mix(in srgb, var(--plate-ink) 6%, transparent);
+  }
+  .zoom-button:active:not(:disabled) {
+    background: color-mix(in srgb, var(--plate-ink) 11%, transparent);
+  }
+  .zoom-button:disabled {
+    opacity: 0.38;
+    cursor: default;
+  }
+  .zoom-readout {
+    min-width: 3.4em;
+    text-align: center;
+    font-family: var(--font-serif);
+    font-style: italic;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    color: color-mix(in srgb, var(--plate-ink) 70%, var(--plate-paper));
+  }
+  .zoom-rule {
+    width: 1px;
+    height: 11px;
+    margin: 0 5px;
+    background: var(--plate-mark);
+  }
+  /* Fingers need more room than the hairlines show. */
+  @media (pointer: coarse) {
+    .zoom-button::after {
+      content: '';
+      position: absolute;
+      inset: -9px -3px;
+    }
+  }
+  .inscription {
+    position: absolute;
+    bottom: 12px;
+    font-family: var(--font-serif);
+    font-style: italic;
+    font-size: 13px;
+    color: color-mix(in srgb, var(--plate-ink) 55%, var(--plate-paper));
+    pointer-events: none;
+    white-space: nowrap;
+  }
+
+  /* DETAILS: small capitals with a drawn plus that turns into a minus. */
+  .disclosure > summary {
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    cursor: pointer;
+    user-select: none;
+  }
+  .disclosure > summary::-webkit-details-marker {
+    display: none;
+  }
+  .disclosure > summary::before {
+    content: '';
+    width: 9px;
+    height: 9px;
+    background:
+      linear-gradient(var(--ink-2), var(--ink-2)) center / 9px 1px no-repeat,
+      linear-gradient(var(--ink-2), var(--ink-2)) center / 1px 9px no-repeat;
+    transition: transform 160ms ease;
+  }
+  .disclosure[open] > summary::before {
+    background: linear-gradient(var(--ink-2), var(--ink-2)) center / 9px 1px no-repeat;
+  }
+  .disclosure > summary:hover .caps {
+    color: var(--ink);
+  }
+}
