@@ -12,6 +12,12 @@ pnpm typecheck
 pnpm build
 ```
 
+## Deployment
+
+Every push to `main` runs the tests, builds with `--base=/tree-garden/` and
+publishes to GitHub Pages: https://reblws.github.io/tree-garden/ (see
+`.github/workflows/pages.yml`). A failing test skips the deploy.
+
 ## Layout
 
 ```
