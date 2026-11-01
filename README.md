@@ -5,11 +5,11 @@ Interactive showcase of algorithms that grow literal trees. It starts with a
 [Effect](https://effect.website).
 
 ```sh
-npm install
-npm run dev        # http://localhost:5173
-npm test           # vitest: core, URL codec, Foldkit story tests
-npm run typecheck
-npm run build
+pnpm install
+pnpm dev           # http://localhost:5173
+pnpm test          # vitest: core, URL codec, Foldkit story tests
+pnpm typecheck
+pnpm build
 ```
 
 ## Layout
