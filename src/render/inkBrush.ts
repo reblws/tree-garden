@@ -3,7 +3,7 @@ import { makeCanvas } from './canvas'
 import { CollinearPen } from './collinearPen'
 import { paintDensityWash } from './densityWash'
 import { type Frame, clamp, isInView, textureMatrix } from './frame'
-import type { GpuInk } from './gpuInk'
+import { type GpuInk, layGpuFrame } from './gpuInk'
 import { FbmCurve, NoiseCurve, hash2 } from './noise'
 import { TONE_CLASSES, WIDTH_CLASS, aerial, coolness, inkDensity, radiusFor, toneClassOf, widthLawOf, widthScaleOf } from './twigPlan'
 
@@ -540,12 +540,7 @@ export const beginInk = (context: CanvasRenderingContext2D, frame: Frame, gpu?: 
       // chains were never walked here, so stop; the caller paints the ink
       // again on the canvas alone.
       if (image === undefined) return false
-      context.save()
-      context.setTransform(1, 0, 0, 1, 0, 0)
-      context.globalAlpha = 1
-      context.globalCompositeOperation = 'source-over'
-      context.drawImage(image, 0, 0)
-      context.restore()
+      layGpuFrame(context, image)
     }
     for (let t = 0; t < TONE_CLASSES; t++) {
       const recession = t / (TONE_CLASSES - 1)

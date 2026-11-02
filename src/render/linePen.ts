@@ -1,5 +1,5 @@
 import { type Frame, isInView } from './frame'
-import type { GpuInk } from './gpuInk'
+import { type GpuInk, layGpuFrame } from './gpuInk'
 import { PEN_WEIGHTS } from './twigPlan'
 
 /**
@@ -21,12 +21,7 @@ export const paintLines = (context: CanvasRenderingContext2D, frame: Frame, gpu?
   if (gpu !== undefined && gpu.isAvailable()) {
     const image = gpu.pens(frame, context.canvas.width, context.canvas.height)
     if (image !== undefined) {
-      context.save()
-      context.setTransform(1, 0, 0, 1, 0, 0)
-      context.globalAlpha = 1
-      context.globalCompositeOperation = 'source-over'
-      context.drawImage(image, 0, 0)
-      context.restore()
+      layGpuFrame(context, image)
       return
     }
   }

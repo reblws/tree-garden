@@ -85,9 +85,9 @@ export interface GpuInk {
   /** The twigs of `frame`, drawn on a canvas the size of `width` × `height`
    *  in screen pixels, ready to be laid on the ink layer with an identity
    *  transform; undefined if the GPU failed (draw them on the canvas). */
-  readonly twigs: (frame: Frame, request: TwigRequest, width: number, height: number) => HTMLCanvasElement | undefined
+  readonly twigs: (frame: Frame, request: TwigRequest, width: number, height: number) => CanvasImageSource | undefined
   /** The Line style's pens, likewise. */
-  readonly pens: (frame: Frame, width: number, height: number) => HTMLCanvasElement | undefined
+  readonly pens: (frame: Frame, width: number, height: number) => CanvasImageSource | undefined
   readonly dispose: () => void
 }
 
@@ -355,9 +355,6 @@ const cut = (position: number): number => (Number.isFinite(position) ? Math.max(
 
 export const createGpuInk = (onChange: () => void): GpuInk | undefined => {
   if (typeof document === 'undefined') return undefined
-  const canvas = document.createElement('canvas')
-  canvas.width = 1
-  canvas.height = 1
   const attributes: WebGLContextAttributes = {
     alpha: true,
     premultipliedAlpha: true,
@@ -371,8 +368,14 @@ export const createGpuInk = (onChange: () => void): GpuInk | undefined => {
     // GPU watchdog to reset every canvas on the page. Canvas2D is faster.
     failIfMajorPerformanceCaveat: true,
   }
-  let gl = canvas.getContext('webgl2', attributes)
-  if (gl === null) return undefined
+  // Prefer an OffscreenCanvas: each frame is handed over with
+  // transferToImageBitmap(), which ends the GL frame and moves its buffer
+  // into a bitmap the 2D layer owns, rather than having the 2D canvas
+  // sample the live drawing buffer of a canvas that is never presented.
+  const surface = makeSurface(attributes)
+  if (surface === undefined) return undefined
+  const { canvas } = surface
+  let gl: WebGL2RenderingContext | null = surface.gl
   // An explicitly chosen software renderer (or Chrome's own fallback after
   // GPU crashes) passes the caveat test: refuse it by name.
   if (isSoftwareRenderer(gl)) {
@@ -625,7 +628,7 @@ export const createGpuInk = (onChange: () => void): GpuInk | undefined => {
     pad: number,
     setDrawUniforms: () => void,
     law: WidthLaw,
-  ): HTMLCanvasElement => {
+  ): CanvasImageSource => {
     const p = programs as Programs
     ensureSize(context, width, height)
     // The growing radii go up each playback frame; the finished ones once.
@@ -650,7 +653,7 @@ export const createGpuInk = (onChange: () => void): GpuInk | undefined => {
     context.clearColor(0, 0, 0, 0)
     context.clear(context.COLOR_BUFFER_BIT)
     const box = scissorFor(frame, pad, width, height)
-    if (box === undefined) return canvas
+    if (box === undefined) return present()
     context.enable(context.SCISSOR_TEST)
     context.scissor(box.x, box.y, box.width, box.height)
     // Once per frame, one vertex per segment: reveal, twig test, class,
@@ -702,13 +705,17 @@ export const createGpuInk = (onChange: () => void): GpuInk | undefined => {
     }
     context.disable(context.BLEND)
     context.disable(context.SCISSOR_TEST)
-    return canvas
+    return present()
   }
 
   const ready = (): WebGL2RenderingContext | undefined =>
     gl !== null && !isLost && !failed && programs !== undefined && !gl.isContextLost() ? gl : undefined
 
-  const guarded = (run: (context: WebGL2RenderingContext) => HTMLCanvasElement | undefined) => {
+  /** The frame just drawn, as an image for a 2D layer: a transferred
+   *  bitmap from an OffscreenCanvas, else the canvas itself. */
+  const present = (): CanvasImageSource => (canvas instanceof HTMLCanvasElement ? canvas : canvas.transferToImageBitmap())
+
+  const guarded = (run: (context: WebGL2RenderingContext) => CanvasImageSource | undefined) => {
     const context = ready()
     if (context === undefined) return undefined
     try {
@@ -780,6 +787,39 @@ export const createGpuInk = (onChange: () => void): GpuInk | undefined => {
 }
 
 const finite = (x: number): number => (Number.isFinite(x) ? x : 3.0e38)
+
+type Surface = { readonly canvas: OffscreenCanvas | HTMLCanvasElement; readonly gl: WebGL2RenderingContext }
+
+/** A WebGL2 context on an OffscreenCanvas where there is one, else on a
+ *  detached canvas element. */
+const makeSurface = (attributes: WebGLContextAttributes): Surface | undefined => {
+  if (typeof OffscreenCanvas === 'function') {
+    try {
+      const canvas = new OffscreenCanvas(1, 1)
+      const gl = canvas.getContext('webgl2', attributes) as WebGL2RenderingContext | null
+      if (gl !== null && typeof canvas.transferToImageBitmap === 'function') return { canvas, gl }
+    } catch {
+      // Fall through to an element.
+    }
+  }
+  const canvas = document.createElement('canvas')
+  canvas.width = 1
+  canvas.height = 1
+  const gl = canvas.getContext('webgl2', attributes)
+  return gl === null ? undefined : { canvas, gl }
+}
+
+/** Lay a GPU frame on a 2D layer at the origin, in screen pixels, and let
+ *  go of it. */
+export const layGpuFrame = (context: CanvasRenderingContext2D, image: CanvasImageSource): void => {
+  context.save()
+  context.setTransform(1, 0, 0, 1, 0, 0)
+  context.globalAlpha = 1
+  context.globalCompositeOperation = 'source-over'
+  context.drawImage(image, 0, 0)
+  context.restore()
+  if (typeof ImageBitmap === 'function' && image instanceof ImageBitmap) image.close()
+}
 
 /** Names of software rasterisers, on which Canvas2D beats this painter. */
 export const SOFTWARE_RENDERER = /swiftshader|llvmpipe|softpipe|software|basic render|mesa offscreen/i
