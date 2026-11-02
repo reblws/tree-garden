@@ -92,6 +92,22 @@ fitted to the finished build.
 filled outlines with seeded, wobbling edges; thinner twigs are polylines
 batched by width and tone class.
 
+- *Twigs on the GPU* (`render/gpuInk.ts`). On screen the twigs, 60–80% of
+  a big tree's segments, are drawn with WebGL2 as instanced capsules with
+  analytic anti-aliasing and laid on the ink layer where the polylines
+  would have been stroked, under the brush. Each (tone, width) class has a
+  coverage slot combined by `max` (a union, like one stroked path) and the
+  slots are composited in the painter's order (classes pool, as separate
+  strokes do); same-class joints are split along their bisector so no pixel
+  is inked twice. A transform-feedback pre-pass does the reveal (Grow,
+  Trace), the twig test, promotion when zoomed, the class and the camera,
+  so a zoom or a pan is a uniform update and playback uploads only radii.
+  Both painters decide from the same radius thresholds and budget cut-offs
+  (`render/twigPlan.ts`). The Line style's four pens use the same path.
+  Without WebGL2, after a lost context (until it is restored) and in the
+  print, the twigs are Canvas2D polylines, with straight runs merged into
+  single lines (`render/collinearPen.ts`).
+
 - *Tone and joins.* Each body is an opaque tone of ink combined with the
   others by `darken` (`lighten` in the dark theme), so a branch flows out
   of its limb without a seam. A branch starts in its parent's tone (a
@@ -148,14 +164,14 @@ mark (a plate tone and a bevelled edge) and pencilled inscriptions with
 the seed; the file carries a pHYs chunk so it opens at 300 dpi. Same
 link, style, season and size give the same print.
 
-Performance, headless Chrome at DPR 2 on a laptop: Twig n=11 (350K
-segments) plays at ~56 fps (draft frames) and its finished plate paints
-in ~65 ms (Ink) / ~140–185 ms (Leaf); Weed n=8 (391K) plays at ~38 fps,
-finished in ~80 / ~125 ms; up to ~120K segments play at 60 fps. The crisp
-repaint after a gesture is ~70–150 ms on ordinary plants and up to
-~300 ms at 5× deep inside the 350K crown (tens of thousands of twigs
-promoted to brush strokes). An A3 print takes about a second, with no
-frame longer than ~140 ms.
+Performance, headless Chrome at DPR 2 on an M4, twigs on the GPU: Twig
+n=11 (350K segments) plays at ~58 fps (draft frames) and its finished
+plate paints in ~70 ms (Ink) / ~95 ms (Leaf) / ~10 ms (Line); Weed n=8
+(391K) plays at ~52–55 fps, finished in ~37 / ~47 / ~9 ms; up to ~120K
+segments play at 60 fps. The crisp repaint after a gesture is painted in
+slices of ~12 ms (see Zoom and pan), so it lands ~200–350 ms after the
+gesture with no task over ~40 ms, even deep inside the 350K crown. An A3
+print takes about a second, with no frame longer than ~140 ms.
 
 Rules of thumb:
 
@@ -191,7 +207,12 @@ focused, `+` and `−` zoom by octaves, `0` fits and the arrow keys pan.
   property; any other new camera (buttons, keys, time travel) is eased to.
 - **Crisp at every zoom.** While the camera moves, cached pictures are
   stretched; ~130 ms after it stops, the visible part of the plate is
-  painted again. Painters build their paths in *plate pixels* (device
+  painted again, in slices: `beginPlate` and `beginInk` (render/plate.ts,
+  render/inkBrush.ts) walk the stroke chains until a deadline and lay
+  everything down at the end, and `<tree-canvas>` runs them 12 ms per
+  task, the paper and the seal in tasks of their own, starting a limb in
+  a fresh task. A gesture, a resize or any other paint cancels it. The
+  picture that lands is the one painting it at once would give. Painters build their paths in *plate pixels* (device
   pixels of the fitted view) under the view's transform (`Frame.view`), so
   strokes, rims, leaves and fibres are the same marks magnified: the trunk
   is genuinely wider. Brush outlines are resampled so they keep a point
@@ -203,9 +224,9 @@ focused, `+` and `−` zoom by octaves, `0` fits and the arrow keys pan.
   cartouche are DOM overlays; the ink is clipped to the plate mark (read
   from the same `--plate-mark-*` CSS variables).
 
-At 350K segments, the crisp repaint after a gesture takes ~70–140 ms
-(less than the fitted plate's, since most of the tree is culled), and
-gestures, including during playback, stay at 60 fps.
+At 350K segments, the crisp repaint after a gesture takes ~50–230 ms of
+work spread over tasks of at most ~40 ms, and gestures, including during
+playback, stay at 60 fps.
 
 ## Pinned versions
 
