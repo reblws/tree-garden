@@ -397,6 +397,12 @@ const plateSection = (h: H, model: Model): Html =>
 
 const dot = (h: H): Html => h.span([h.Class('text-rule-strong'), h.AriaHidden(true)], ['·'])
 
+/** What "grown in" counts, for its tooltip. */
+const growthBreakdown = (stats: BuildStats): string =>
+  stats.topologyMs === undefined
+    ? 'Parse, rewrite, turtle and branch topology'
+    : `Parse, rewrite and turtle ${(stats.elapsedMs - stats.topologyMs).toFixed(1)} ms, branch topology ${stats.topologyMs.toFixed(1)} ms`
+
 const statsLine = (h: H, stats: BuildStats, requested: number): Html =>
   h.div(
     [h.Class('flex flex-col gap-2')],
@@ -410,7 +416,7 @@ const statsLine = (h: H, stats: BuildStats, requested: number): Html =>
           dot(h),
           h.span([], [`${formatCount(stats.segmentCount)} segments`]),
           dot(h),
-          h.span([], [`grown in ${stats.elapsedMs.toFixed(1)} ms`]),
+          h.span([h.Title(growthBreakdown(stats))], [`grown in ${stats.elapsedMs.toFixed(1)} ms`]),
         ],
       ),
       ...(stats.truncated

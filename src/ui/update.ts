@@ -137,6 +137,9 @@ export const update = (model: Model, message: Message) =>
         ? { model }
         : { model: modifyFields(model, { errors: () => errors }) },
 
+    // Only ever an older build than the latest: nothing to do.
+    SupersededGenerate: () => ({ model }),
+
     ClickedTogglePlay: () => ({
       model: modifyFields(model, {
         playback: playback =>

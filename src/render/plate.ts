@@ -1,5 +1,6 @@
-import { type BranchTopology, PIPE_EXPONENT, analyzeBranches, pipeRadii } from '../core/branching'
+import { type BranchTopology, PIPE_EXPONENT, pipeRadii } from '../core/branching'
 import type { Segments2D } from '../core/geometry'
+import { GeometryStore } from '../engine/geometryStore'
 import type { Rect } from './camera'
 import { hasFoliage, paintFoliage } from './foliage'
 import { type Frame, type View, applyView, widthScale } from './frame'
@@ -19,16 +20,9 @@ import type { Season } from './season'
  * Nothing here knows about the camera's gestures or the DOM's plate mark.
  */
 
-/** Topology is computed once per geometry and kept as long as it is. */
-const topologies = new WeakMap<Segments2D, BranchTopology>()
-export const topologyOf = (geometry: Segments2D): BranchTopology => {
-  let topology = topologies.get(geometry)
-  if (topology === undefined) {
-    topology = analyzeBranches(geometry, PIPE_EXPONENT)
-    topologies.set(geometry, topology)
-  }
-  return topology
-}
+/** Topology is computed once per geometry (usually by the generator's
+ *  worker, along with it) and kept as long as it is. */
+export const topologyOf = (geometry: Segments2D): BranchTopology => GeometryStore.topologyOf(geometry)
 
 /** Room to keep clear around the plant, device pixels from each edge of
  *  the canvas. */

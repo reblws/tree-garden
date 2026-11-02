@@ -74,6 +74,19 @@ describe('update', () => {
     )
   })
 
+  test('a superseded build changes nothing; the newer one lands', () => {
+    story(
+      update,
+      given(modifyFields(initialModel, { shown: () => Option.some(stats(1)) })),
+      message(Message.ChangedAngle({ value: 30 })),
+      Command.resolve(Generate, Message.SupersededGenerate({ buildId: 2 })),
+      model(model => expect(Option.getOrThrow(model.shown).buildId).toBe(1)),
+      message(Message.ChangedAngle({ value: 31 })),
+      Command.resolve(Generate, Message.CompletedGenerate({ stats: stats(3) })),
+      model(model => expect(Option.getOrThrow(model.shown).buildId).toBe(3)),
+    )
+  })
+
   test('a parse error keeps the last good plant on screen', () => {
     story(
       update,
