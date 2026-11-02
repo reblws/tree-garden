@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 
-import { analyzeBranches, pipeRadii } from './branching'
+import { analyzeBranches, growRadii, pipeRadii } from './branching'
 import { interpret } from './lsystem'
 
 const turtle = (symbols: string, angleDegrees = 30) =>
@@ -135,5 +135,70 @@ describe('chain order and recession', () => {
     expect(Array.from(analyzeBranches(turtle(symbols)).chainRecession)).toEqual(
       Array.from(analyzeBranches(turtle(symbols)).chainRecession),
     )
+  })
+})
+
+describe('growRadii (the Grow reveal by subtree ranges)', () => {
+  const grown = (symbols: string) => {
+    const geometry = turtle(symbols)
+    return { geometry, topology: analyzeBranches(geometry) }
+  }
+  /** The plain definition: visible once arrival < threshold. */
+  const plain = (geometry: ReturnType<typeof turtle>, threshold: number) => {
+    const out = new Float32Array(geometry.count)
+    const max = pipeRadii(geometry, 2.3, out, geometry.count, i => (geometry.arrival[i] ?? 0) < threshold)
+    return { out: Array.from(out), max }
+  }
+
+  test('subtrees are index ranges in depth-first order', () => {
+    // 0 F, 1 [+F, 2 [-F], 3 F], 4 F
+    expect(Array.from(grown('F[+F[-F]F]F').topology.subtreeEnd)).toEqual([5, 4, 3, 4, 5])
+  })
+
+  test('a segment weighs the visible tips in its range', () => {
+    // Trunk 0 (arrival 0) forks into 1 and 4 (arrival 1); 1 forks into 2 and 3 (arrival 2).
+    const { geometry, topology } = grown('F[+F[+F][-F]][-F]')
+    const out = new Float32Array(geometry.count)
+    // Only the trunk: a tip of the visible tree.
+    expect(growRadii(geometry, topology, 2, out, 0.5)).toBe(1)
+    expect(Array.from(out)).toEqual([1, 0, 0, 0, 0])
+    // The trunk and its two children: two visible tips.
+    growRadii(geometry, topology, 2, out, 1.5)
+    expect(Array.from(out)).toEqual([Math.fround(Math.SQRT2), 1, 0, 0, 1])
+    // Everything: three tips.
+    expect(growRadii(geometry, topology, 2, out, 10)).toBeCloseTo(Math.sqrt(3))
+    expect(out[0]).toBeCloseTo(Math.sqrt(3))
+  })
+
+  test('matches the plain backwards pass at every threshold, bit for bit', () => {
+    const { geometry, topology } = grown('F[+F[+F[+F][-F]F][-F]F]F[-F[-F[+F]]F]F[+FF]F'.repeat(2))
+    const out = new Float32Array(geometry.count)
+    for (let threshold = 0; threshold <= geometry.maxArrival + 1; threshold += 0.25) {
+      const max = growRadii(geometry, topology, 2.3, out, threshold)
+      const expected = plain(geometry, threshold)
+      expect(Array.from(out)).toEqual(expected.out)
+      expect(max).toBe(expected.max)
+    }
+  })
+
+  test('falls back to the backwards pass when a move breaks the order', () => {
+    // The stroke after `f` starts inside the trunk's index range without
+    // belonging to its subtree.
+    const { geometry, topology } = grown('F[+FfF]F[-F]F')
+    expect(topology.subtreeEnd.length).toBe(0)
+    const out = new Float32Array(geometry.count)
+    for (const threshold of [0.5, 1.5, 2.5, 10]) {
+      const max = growRadii(geometry, topology, 2.3, out, threshold)
+      const expected = plain(geometry, threshold)
+      expect(Array.from(out)).toEqual(expected.out)
+      expect(max).toBe(expected.max)
+    }
+  })
+
+  test('leaves a longer scratch buffer alone past the segments', () => {
+    const { geometry, topology } = grown('F[+F][-F]F')
+    const out = new Float32Array(geometry.count + 2).fill(9)
+    growRadii(geometry, topology, 2.3, out, 1.5)
+    expect(Array.from(out.subarray(geometry.count))).toEqual([9, 9])
   })
 })
