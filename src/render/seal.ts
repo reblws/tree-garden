@@ -1,3 +1,4 @@
+import { makeCanvas } from './canvas'
 import { hash2, noise1 } from './noise'
 
 /**
@@ -20,9 +21,7 @@ let cache: { size: number; canvas: HTMLCanvasElement } | undefined
 export const sealImage = (size: number): HTMLCanvasElement => {
   const px = Math.max(16, Math.min(1024, Math.round(size)))
   if (cache?.size === px) return cache.canvas
-  const canvas = document.createElement('canvas')
-  canvas.width = px
-  canvas.height = px
+  const canvas = makeCanvas(px, px)
   const context = canvas.getContext('2d')
   if (context === null) return canvas
   context.scale(px, px)
