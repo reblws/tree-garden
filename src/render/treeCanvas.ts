@@ -21,9 +21,10 @@ import {
   zoomAbout,
 } from './camera'
 import type { Frame } from './frame'
+import { type GpuInk, createGpuInk } from './gpuInk'
 import { type Palette, readPalette } from './palette'
 import { paintPaper } from './paper'
-import { type Placement, buildFrame, composePlate, placePlant } from './plate'
+import { type Composition, type Placement, type PlateJob, beginPlate, buildFrame, composePlate, placePlant } from './plate'
 import { RenderStyle } from './renderStyle'
 import { plateMargins } from './sheet'
 import { RevealMode } from './revealMode'
@@ -70,6 +71,8 @@ const DRAFT_SEGMENTS = 60_000
 const SEAL = 0.03
 /** Quiet time after the last gesture input before the crisp repaint. */
 const SETTLE_MS = 130
+/** Work per task for a repaint spread over tasks (see `#startJob`). */
+const SLICE_MS = 12
 /** A wheel gesture ends after this much quiet. */
 const WHEEL_END_MS = 180
 /** Easing to a camera set from outside (buttons, keys, reset). */
@@ -128,6 +131,10 @@ class TreeCanvasElement extends HTMLElement {
   #finalBase = ''
   #finalCamera: Camera = fitCamera
   #radius: Float32Array = new Float32Array(0)
+  /** The GPU twig painter: undefined until first needed, null without
+   *  WebGL2 (or when switched off). */
+  #gpu: GpuInk | null | undefined
+  #gpuEnabled = true
   #palette: Palette | undefined
   #inset: Inset | undefined
   #frame = 0
@@ -152,6 +159,10 @@ class TreeCanvasElement extends HTMLElement {
   #isDragging = false
   #gestureScale = 1
   #hasPainted = false
+  /** A plate being painted over several tasks (the crisp repaint after a
+   *  gesture, or the fitted plate refilled), and the port that runs it. */
+  #job: { readonly id: string; readonly step: (deadline: number) => boolean; readonly done: () => void } | undefined
+  #pump: MessageChannel | undefined
 
   /** Milliseconds the last redraw took, and what it was, for profiling
    *  from the console. */
@@ -222,6 +233,36 @@ class TreeCanvasElement extends HTMLElement {
     return this.#shown
   }
 
+  /** Draw the twigs on the GPU when WebGL2 is there (on by default; off
+   *  draws them on the canvas, as the print does). For comparisons from the
+   *  console. */
+  set gpuEnabled(value: boolean) {
+    if (value === this.#gpuEnabled) return
+    this.#gpuEnabled = value
+    this.#invalidate()
+  }
+  get gpuEnabled(): boolean {
+    return this.#gpuEnabled
+  }
+  /** Whether the last paint could use the GPU. */
+  get gpuActive(): boolean {
+    return this.#gpuEnabled && this.#gpu != null && this.#gpu.isAvailable()
+  }
+
+  /** Forget every cached picture and paint again (the GPU came or went). */
+  #invalidate() {
+    this.#fitFinalKey = ''
+    this.#finalKey = ''
+    this.#finalBase = ''
+    this.#schedule()
+  }
+
+  #gpuInk(): GpuInk | undefined {
+    if (!this.#gpuEnabled) return undefined
+    if (this.#gpu === undefined) this.#gpu = createGpuInk(() => this.#invalidate()) ?? null
+    return this.#gpu ?? undefined
+  }
+
   connectedCallback() {
     this.#canvas.style.display = 'block'
     this.#canvas.style.width = '100%'
@@ -256,6 +297,9 @@ class TreeCanvasElement extends HTMLElement {
     this.removeEventListener('gesturestart', this.#onGestureStart)
     this.removeEventListener('gesturechange', this.#onGestureChange)
     this.removeEventListener('gestureend', this.#onGestureEnd)
+    this.#cancelJob()
+    this.#gpu?.dispose()
+    this.#gpu = undefined
     cancelAnimationFrame(this.#frame)
     cancelAnimationFrame(this.#moveFrame)
     clearTimeout(this.#crispTimer)
@@ -370,6 +414,7 @@ class TreeCanvasElement extends HTMLElement {
 
   /** Show `next` now (clamped), and report it at the next frame. */
   #gesture(next: Camera) {
+    this.#cancelJob()
     this.#ease = undefined
     this.#movingUntil = performance.now() + SETTLE_MS
     clearTimeout(this.#crispTimer)
@@ -424,6 +469,7 @@ class TreeCanvasElement extends HTMLElement {
     const height = Math.max(1, Math.round(this.clientHeight * dpr))
     this.#inset = undefined
     if (width === this.#canvas.width && height === this.#canvas.height) return
+    this.#cancelJob()
     for (const canvas of [this.#canvas, this.#ink, this.#wash, this.#final, this.#fitFinal]) {
       canvas.width = width
       canvas.height = height
@@ -452,16 +498,20 @@ class TreeCanvasElement extends HTMLElement {
     const camera = this.#shown
     const isMoving = this.#isMoving(startedAt)
     const fitPaper = this.#fitPaperFor(width, height, dpr, palette)
-    const paper: Paper = isFit(camera)
-      ? { image: fitPaper, view: IDENTITY }
-      : isMoving
-        ? { image: fitPaper, view: cameraView(camera, width, height) }
-        : { image: this.#paperFor(width, height, dpr, palette, camera), view: IDENTITY }
+    // The paper at the camera is painted only when it is needed: the crisp
+    // repaint paints it in a task of its own.
+    const paperOf = (): Paper =>
+      isFit(camera)
+        ? { image: fitPaper, view: IDENTITY }
+        : isMoving
+          ? { image: fitPaper, view: cameraView(camera, width, height) }
+          : { image: this.#paperFor(width, height, dpr, palette, camera), view: IDENTITY }
+    if (isMoving) this.#cancelJob()
 
     context.setTransform(1, 0, 0, 1, 0, 0)
     const geometry = GeometryStore.get(this.#buildId)
     if (geometry === undefined || geometry.count === 0) {
-      drawPaper(context, paper)
+      drawPaper(context, paperOf())
       this.lastDrawKind = 'empty'
       return
     }
@@ -471,7 +521,7 @@ class TreeCanvasElement extends HTMLElement {
     let kind: typeof this.lastDrawKind = 'cached'
     if (this.#progress >= 1 && isFit(camera)) {
       if (base !== this.#fitFinalKey) {
-        this.#compose(this.#fitFinal, paper, this.#frameFor(geometry, palette, dpr, placement, camera), placement)
+        this.#compose(this.#fitFinal, paperOf(), this.#frameFor(geometry, palette, dpr, placement, camera), placement)
         this.#fitFinalKey = base
         kind = 'final'
       }
@@ -481,17 +531,17 @@ class TreeCanvasElement extends HTMLElement {
       kind = 'preview'
     } else if (this.#progress >= 1) {
       const key = `${base}|${camera.zoom}|${camera.x}|${camera.y}`
-      if (key !== this.#finalKey) {
-        this.#compose(this.#final, paper, this.#frameFor(geometry, palette, dpr, placement, camera), placement)
-        this.#finalKey = key
-        this.#finalBase = base
-        this.#finalCamera = camera
-        kind = 'final'
-        if (this.#fitFinalKey !== base) this.#refillFitFinal(base)
+      if (key === this.#finalKey) {
+        context.drawImage(this.#final, 0, 0)
+      } else {
+        // The crisp repaint is spread over tasks (it can take a few hundred
+        // ms deep in a big crown); the preview stays up until it lands.
+        this.#startCrisp(key, base, camera, geometry, palette, dpr, placement)
+        this.#preview(context, camera, fitPaper, base)
+        kind = 'preview'
       }
-      context.drawImage(this.#final, 0, 0)
     } else {
-      this.#compose(this.#canvas, paper, this.#frameFor(geometry, palette, dpr, placement, camera), placement)
+      this.#compose(this.#canvas, paperOf(), this.#frameFor(geometry, palette, dpr, placement, camera), placement)
       kind = 'playback'
     }
     this.#hasPainted = true
@@ -500,9 +550,47 @@ class TreeCanvasElement extends HTMLElement {
   }
 
   /**
+   * The crisp picture at `camera`, painted into `#final` over several
+   * tasks: the paper first, then the plate (beginPlate), at most SLICE_MS
+   * of work at a time, so the page never stalls on it. A gesture, a resize
+   * or any other paint cancels it; the next draw starts it again. The
+   * picture is the same as painting it at once.
+   */
+  #startCrisp(key: string, base: string, camera: Camera, geometry: Segments2D, palette: Palette, dpr: number, placement: Placement) {
+    const id = `crisp|${key}`
+    if (this.#job?.id === id) return
+    const { width, height } = this.#canvas
+    let plate: PlateJob | undefined
+    let paper: Paper | undefined
+    const startedAt = performance.now()
+    this.#startJob(
+      id,
+      deadline => {
+        if (paper === undefined) {
+          paper = { image: this.#paperFor(width, height, dpr, palette, camera), view: IDENTITY }
+          if (performance.now() > deadline) return false
+        }
+        const image = paper
+        plate ??= beginPlate(this.#final, { ink: this.#ink, wash: this.#wash }, this.#frameFor(geometry, palette, dpr, placement, camera), this.#composition(this.#final, image, placement))
+        return plate.step(deadline)
+      },
+      () => {
+        this.#finalKey = key
+        this.#finalBase = base
+        this.#finalCamera = camera
+        this.lastDrawKind = 'final'
+        this.lastDrawMs = performance.now() - startedAt
+        this.#schedule()
+        if (this.#fitFinalKey !== base) this.#refillFitFinal(base)
+      },
+    )
+  }
+
+  /**
    * The preview's backdrop is the finished plate at the fitted view. After
    * a rebuild while zoomed in it is stale, and a zoom out would show bare
-   * paper around the crisp part; paint it again when the page is idle.
+   * paper around the crisp part; paint it again, in slices, once the page
+   * is idle.
    */
   #refillFitFinal(base: string) {
     const run = () => {
@@ -513,13 +601,57 @@ class TreeCanvasElement extends HTMLElement {
       const current = `${this.#buildId}|${width}x${height}|${this.#style}|${this.#season}|${palette?.key}`
       if (geometry === undefined || palette === undefined || current !== base || this.#fitFinalKey === base) return
       if (this.#progress < 1 || this.#isMoving(performance.now())) return
+      // The crisp repaint goes first; this waits for it.
+      if (this.#job !== undefined) {
+        this.#refillFitFinal(base)
+        return
+      }
       const paper: Paper = { image: this.#fitPaperFor(width, height, dpr, palette), view: IDENTITY }
       const placement = this.#place(geometry)
-      this.#compose(this.#fitFinal, paper, this.#frameFor(geometry, palette, dpr, placement, fitCamera), placement)
-      this.#fitFinalKey = base
+      let plate: PlateJob | undefined
+      this.#startJob(
+        `fit|${base}`,
+        deadline => {
+          plate ??= beginPlate(this.#fitFinal, { ink: this.#ink, wash: this.#wash }, this.#frameFor(geometry, palette, dpr, placement, fitCamera), this.#composition(this.#fitFinal, paper, placement))
+          return plate.step(deadline)
+        },
+        () => {
+          this.#fitFinalKey = base
+        },
+      )
     }
     if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 2000 })
     else window.setTimeout(run, 300)
+  }
+
+  /** Run `step` in slices of SLICE_MS, one task each, until it says it is
+   *  done; then `done`. Replaces any job under way. */
+  #startJob(id: string, step: (deadline: number) => boolean, done: () => void) {
+    this.#job = { id, step, done }
+    if (this.#pump === undefined) {
+      this.#pump = new MessageChannel()
+      this.#pump.port1.onmessage = () => this.#runJob()
+    }
+    this.#pump.port2.postMessage(0)
+  }
+
+  #runJob() {
+    const job = this.#job
+    if (job === undefined) return
+    const deadline = performance.now() + SLICE_MS
+    let isDone = false
+    while (!isDone && performance.now() <= deadline) isDone = job.step(deadline)
+    if (this.#job !== job) return
+    if (isDone) {
+      this.#job = undefined
+      job.done()
+    } else {
+      this.#pump?.port2.postMessage(0)
+    }
+  }
+
+  #cancelJob() {
+    this.#job = undefined
   }
 
   /** Advance an ease towards a camera set from outside. */
@@ -616,13 +748,23 @@ class TreeCanvasElement extends HTMLElement {
   /** Paint the wash and ink layers for `frame` and lay them on the paper in
    *  `target`, inside the plate mark. */
   #compose(target: HTMLCanvasElement, paper: Paper, frame: Frame, placement: Placement) {
-    composePlate(target, { ink: this.#ink, wash: this.#wash }, frame, {
+    // The layers are shared: a repaint in slices has to start over.
+    if (this.#job !== undefined) {
+      this.#job = undefined
+      this.#schedule()
+    }
+    composePlate(target, { ink: this.#ink, wash: this.#wash }, frame, this.#composition(target, paper, placement))
+  }
+
+  #composition(target: HTMLCanvasElement, paper: Paper, placement: Placement): Composition {
+    return {
       style: this.#style,
       season: this.#season,
       placement,
       drawPaper: context => drawPaper(context, paper),
       clip: context => this.#clipToPlate(context, target.width, target.height),
-    })
+      gpu: this.#gpuInk(),
+    }
   }
 
   /** Fit the plant inside the plate mark with the print's margins

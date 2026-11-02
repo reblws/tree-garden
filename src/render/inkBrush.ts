@@ -1,8 +1,11 @@
 import { litSide, shade } from '../core/shading'
 import { makeCanvas } from './canvas'
+import { CollinearPen } from './collinearPen'
 import { paintDensityWash } from './densityWash'
 import { type Frame, clamp, isInView, textureMatrix } from './frame'
-import { fbm1, hash2, noise1 } from './noise'
+import type { GpuInk } from './gpuInk'
+import { FbmCurve, NoiseCurve, hash2 } from './noise'
+import { TONE_CLASSES, WIDTH_CLASS, aerial, coolness, inkDensity, radiusFor, toneClassOf, widthLawOf, widthScaleOf } from './twigPlan'
 
 /**
  * Ink-brush painter (sumi-e). The tree is painted the way a person would
@@ -31,6 +34,10 @@ import { fbm1, hash2, noise1 } from './noise'
  *   and tone: one stroke call per class, so hundreds of thousands of twigs
  *   stay cheap. Where twigs crowd, they are thinned to a wash and laid over
  *   a soft density field (densityWash.ts), so dense crowns read as mist.
+ *   On screen the twigs are drawn on the GPU (gpuInk.ts), which makes the
+ *   same decisions from the same thresholds (twigPlan.ts); the Canvas2D
+ *   polylines remain for the print and when WebGL2 isn't there, with
+ *   straight runs merged into single lines (collinearPen.ts).
  *
  * All noise is a hash of the chain index and the distance along the chain
  * in plate units, so marks never flicker, swim or crawl under the camera.
@@ -55,13 +62,12 @@ const SAMPLE_STEP = 3.5
  *  interactive. */
 const SAMPLE_BUDGET = 120_000
 const PROMOTE_BUDGET = 60_000
+/** When a paint is spread over tasks (`beginInk`), a limb is left for the
+ *  next task once less than this much of the current one remains, ms. */
+const LIMB_HEADROOM = 8
 /** Upper bound on the extra samples taken when zoomed in (see `upsample`).
  *  Past it strokes keep their plate-resolution outline. */
 const FINE_BUDGET = 400_000
-/** Width classes for the polyline strokes, in device pixels on screen. */
-const WIDTH_CLASS = 0.2
-/** Twig tone classes, by how far back the twig sits. */
-const TONE_CLASSES = 4
 
 /**
  * Bark fissures, coarse to fine. Sizes in CSS pixels of the fitted plate:
@@ -155,33 +161,46 @@ const ensureFine = (n: number) => {
   ql = new Float64Array(size)
 }
 
+// Noise walkers for the bark loops: each keeps its lattice cell, so the
+// several samples a stroke takes per cell don't hash again. Reset to a
+// curve's seed before each walk; the values are noise1's and fbm1's.
+const pressureCurve = new NoiseCurve(0)
+const leftCurve = new FbmCurve(0)
+const rightCurve = new FbmCurve(0)
+const leftFine = new NoiseCurve(0)
+const rightFine = new NoiseCurve(0)
+const bandBroad = new NoiseCurve(0)
+const bandFine = new NoiseCurve(0)
+const trackRank = new NoiseCurve(0)
+const trackDash = new NoiseCurve(0)
+const trackWeave = new FbmCurve(0)
+const dryZone = new NoiseCurve(0)
+const hairDash = new NoiseCurve(0)
+
 const smoothstep = (a: number, b: number, x: number) => {
   const t = clamp((x - a) / (b - a), 0, 1)
   return t * t * (3 - 2 * t)
 }
-
-/** Ink density for a stroke `cssWidth` CSS px wide on the fitted plate:
- *  hairlines are a pale grey, limbs nearly full. Continuous, so a chain
- *  that turns from brush into polyline keeps its tone. */
-export const inkDensity = (cssWidth: number): number => 0.6 + 0.22 * widthScaleOf(cssWidth)
 
 /** The body of a brush stroke is a wash, lighter than a line of the same
  *  width: its bark, shading and rim (see `piece`) carry the darks, as the
  *  texture strokes (cun) do over a wash in a Chinese painting of a tree. */
 const bodyDensity = (cssWidth: number): number => 0.62 + 0.1 * widthScaleOf(cssWidth)
 
-/** 0 for a hairline (0.5 CSS px), 1 for a limb (13 CSS px and up), log scale. */
-const widthScaleOf = (cssWidth: number): number => clamp(Math.log2(Math.max(cssWidth, 0.5) / 0.5) / 4.7, 0, 1)
-
-/** Aerial perspective: further from the trunk and further back, lighter. */
-const aerial = (order: number, recession: number): number =>
-  (1 - 0.05 * Math.min(order, 5)) * (1 - 0.42 * recession)
-
-/** ... and cooler: the blue-grey of thinned ink. */
-const coolness = (order: number, recession: number): number =>
-  Math.min(0.8, recession * 0.75 + Math.min(order, 6) * 0.04)
-
-export const paintInk = (context: CanvasRenderingContext2D, frame: Frame): void => {
+/**
+ * Paint the ink of `frame`. With `gpu` (and WebGL2 up), the twigs are drawn
+ * on the GPU and laid in where their polylines would have been stroked.
+ */
+/**
+ * Paint the ink of `frame` as a job that can be spread over several tasks:
+ * `step` walks the chains (building brush outlines, the bulk of the work)
+ * until `deadline` (a `performance.now()` time) and says whether it is
+ * done; `finish` then lays everything down. Nothing but the density wash
+ * touches `context` before `finish`, and the result is the same however
+ * the steps fall. With `gpu` (and WebGL2 up), the twigs are drawn on the GPU
+ * and laid in where their polylines would have been stroked.
+ */
+export const beginInk = (context: CanvasRenderingContext2D, frame: Frame, gpu?: GpuInk): InkJob => {
   const { geometry, topology, radius, dpr, scale, offsetX, offsetY, visible, view, palette } = frame
   const { coords, parent } = geometry
   const { chainSegments, chainStart, chainCount, mainChild, chainOrder, chainRecession, chainParent } = topology
@@ -196,6 +215,16 @@ export const paintInk = (context: CanvasRenderingContext2D, frame: Frame): void 
   const promoteMin = frame.isDraft ? Number.POSITIVE_INFINITY : brushMin / zoom
   const step = SAMPLE_STEP * dpr
   const isZoomed = zoom > 1 + 1e-6
+  // The width tests as radius thresholds (w(r) >= w ⟺ r >= radiusFor(w)),
+  // which the GPU makes too, on the same float32 radii.
+  const law = widthLawOf(frame.width)
+  const brushRadius = radiusFor(law, brushMin)
+  const promoteRadius = isZoomed ? radiusFor(law, promoteMin) : Number.POSITIVE_INFINITY
+  const isGpu = gpu !== undefined && gpu.isAvailable()
+  // Chain positions (see twigPlan.packSegmentMeta) from which the brush and
+  // promotion budgets were spent: the GPU needs them to agree.
+  let coarseCut = Number.POSITIVE_INFINITY
+  let promoteCut = Number.POSITIVE_INFINITY
   // Room around a segment for the widest stroke there is, for culling.
   const cullPad = frame.width(topology.maxRadius) * 2 + 4 * dpr
 
@@ -238,16 +267,25 @@ export const paintInk = (context: CanvasRenderingContext2D, frame: Frame): void 
   /** Promoted twigs without marks, by tone (see `promote`). */
   const batched = new Map<number, Path2D>()
 
-  for (let c = 0; c < chainCount; c++) {
+  const pen = new CollinearPen()
+
+  const walkChain = (c: number): void => {
     const begin = chainStart[c] ?? 0
     const end = chainStart[c + 1] ?? 0
     const first = chainSegments[begin] ?? 0
-    if (visible(first) <= 0) continue
+    if (visible(first) <= 0) return
+    // On the GPU, a chain that is all twig is drawn there entirely. (Its
+    // tone is never needed: a chain with a brush stroke or a promoted twig
+    // has a parent with one too, being at least as wide.)
+    if (isGpu) {
+      const r = radius[first] ?? 0
+      if ((r < brushRadius || budget.coarse <= 0) && (r < promoteRadius || budget.promote <= 0)) return
+    }
     const order = chainOrder[c] ?? 0
     const recession = chainRecession[c] ?? 0
     const airy = aerial(order, recession)
     const chainCool = coolness(order, recession)
-    const toneClass = Math.min(TONE_CLASSES - 1, Math.round(recession * (TONE_CLASSES - 1)))
+    const toneClass = toneClassOf(recession)
     cool[c] = chainCool
     const up = chainParent[c] ?? -1
 
@@ -320,8 +358,8 @@ export const paintInk = (context: CanvasRenderingContext2D, frame: Frame): void 
       const segment = chainSegments[k] ?? 0
       const v = visible(segment)
       if (v <= 0) break
+      if ((radius[segment] ?? 0) < brushRadius || budget.coarse <= 0) break
       const w0 = frame.width(radius[segment] ?? 0)
-      if (w0 < brushMin || budget.coarse <= 0) break
       const next = mainChild[segment] ?? -1
       const isLast = v < 1 || next < 0 || visible(next) <= 0
       const w1 = isLast ? w0 * (v < 1 ? 0.25 : 0.45) : frame.width(radius[next] ?? 0)
@@ -337,7 +375,10 @@ export const paintInk = (context: CanvasRenderingContext2D, frame: Frame): void 
       if (w0 > maxWidth) maxWidth = w0
       // Only what will be drawn counts against the budget: zoomed in, most
       // of the tree is walked (so its texture stays put) but culled.
-      if (!isZoomed || isInView(view, x0, y0, x1, y1, w0 * 2 + 4 * dpr)) budget.coarse -= n - before
+      if (!isZoomed || isInView(view, x0, y0, x1, y1, w0 * 2 + 4 * dpr)) {
+        budget.coarse -= n - before
+        if (budget.coarse <= 0 && coarseCut === Number.POSITIVE_INFINITY) coarseCut = k + 1
+      }
       if (isLast) {
         k++
         break
@@ -368,7 +409,9 @@ export const paintInk = (context: CanvasRenderingContext2D, frame: Frame): void 
 
     // 2. The rest of the chain: polylines grouped by width class, or, when
     //    zoomed in far enough, brush strokes of their own. The distance
-    //    along the chain is kept so their texture stays put.
+    //    along the chain is kept so their texture stays put. On the GPU
+    //    only the promoted twigs are walked: once the chain is too thin to
+    //    promote (it only narrows), the rest is the GPU's.
     let lastClass = -1
     let arc = length
     let runWidth = 0
@@ -380,6 +423,8 @@ export const paintInk = (context: CanvasRenderingContext2D, frame: Frame): void 
       const segment = chainSegments[k] ?? 0
       const v = visible(segment)
       if (v <= 0) break
+      const r = radius[segment] ?? 0
+      if (isGpu && (r < promoteRadius || budget.promote <= 0)) break
       const fraction = v < 1 ? v : 1
       const o = segment * 4
       const ax = coords[o] ?? 0
@@ -395,12 +440,13 @@ export const paintInk = (context: CanvasRenderingContext2D, frame: Frame): void 
           runWidth = 0
         }
         arc += Math.hypot(x1 - x0, y1 - y0)
+        if (lastClass !== -1) pen.end()
         lastClass = -1
         if (v < 1) break
         continue
       }
-      const w0 = frame.width(radius[segment] ?? 0)
-      if (isZoomed && w0 >= promoteMin && budget.promote > 0 && isInView(view, x0, y0, x1, y1, w0 * 2 + 4 * dpr)) {
+      const w0 = frame.width(r)
+      if (r >= promoteRadius && budget.promote > 0 && isInView(view, x0, y0, x1, y1, w0 * 2 + 4 * dpr)) {
         const next = mainChild[segment] ?? -1
         const isLast = v < 1 || next < 0 || visible(next) <= 0
         const w1 = isLast ? w0 * (v < 1 ? 0.25 : 0.45) : frame.width(radius[next] ?? 0)
@@ -411,8 +457,10 @@ export const paintInk = (context: CanvasRenderingContext2D, frame: Frame): void 
         const before = n
         n = appendSamples(n, x0, y0, x1, y1, w0, w1, arc, step)
         budget.promote -= n - before
+        if (budget.promote <= 0 && promoteCut === Number.POSITIVE_INFINITY) promoteCut = k + 1
         arc = ss[n - 1] ?? arc
         if (w0 > runWidth) runWidth = w0
+        if (lastClass !== -1) pen.end()
         lastClass = -1
         if (isLast) n = promote(n, runWidth, arc - runStart, runIsStart)
         if (v < 1) break
@@ -426,127 +474,203 @@ export const paintInk = (context: CanvasRenderingContext2D, frame: Frame): void 
       if (isZoomed) {
         arc += Math.hypot(x1 - x0, y1 - y0)
         if (!isInView(view, x0, y0, x1, y1, w)) {
+          if (lastClass !== -1) pen.end()
           lastClass = -1
           if (v < 1) break
           continue
         }
       }
+      if (isGpu) {
+        // A twig on screen that isn't promoted: the GPU draws it.
+        if (v < 1) break
+        continue
+      }
       const widthClass = Math.max(1, Math.round((w * zoom) / (WIDTH_CLASS * dpr)))
       const path = (twigs[widthClass] ??= new Path2D())
       if (widthClass !== lastClass) {
-        path.moveTo(x0, y0)
+        pen.moveTo(path, x0, y0)
         lastClass = widthClass
       }
-      path.lineTo(x1, y1)
+      pen.lineTo(x0, y0, x1, y1)
       if (v < 1) break
     }
+    pen.end()
     if (n > 0) promote(n, runWidth, arc - runStart, runIsStart)
   }
 
-  // Twigs first, light and fine; the brush strokes go on top. Where
-  // thousands of twigs crowd each square inch they are laid in as a wash of
-  // diluted ink rather than a solid black mass.
-  for (let t = 0; t < TONE_CLASSES; t++) {
-    const recession = t / (TONE_CLASSES - 1)
-    const twigs = thin[t] as Array<Path2D | undefined>
-    for (let widthClass = 1; widthClass < twigs.length; widthClass++) {
-      const path = twigs[widthClass]
-      if (path === undefined) continue
-      const w = (widthClass * WIDTH_CLASS * dpr) / zoom
-      context.lineWidth = w
-      context.strokeStyle = palette.inkTint(coolness(2, recession), 1)
-      context.globalAlpha = inkDensity(w / dpr) * aerial(2, recession) * dilution
-      context.stroke(path)
+  let next = 0
+  const walk = (deadline: number): boolean => {
+    let ran = 0
+    while (next < chainCount) {
+      // A limb (a chain that starts as a brush stroke) can take a while:
+      // start one in a fresh task rather than at the end of a busy one.
+      if (ran++ > 0 && (radius[chainSegments[chainStart[next] ?? 0] ?? 0] ?? 0) >= brushRadius && performance.now() > deadline - LIMB_HEADROOM) break
+      const spent = budget.coarse + budget.promote
+      walkChain(next++)
+      // Look at the clock after every brush stroke (they can take a while)
+      // and every few twigs.
+      if ((budget.coarse + budget.promote !== spent || (next & 15) === 0) && performance.now() > deadline) break
     }
+    return next >= chainCount
   }
 
-  // Promoted twigs without marks, a fill per tone; they are thinner than
-  // any brush stroke, so they go first.
-  context.globalAlpha = 1
-  context.globalCompositeOperation = palette.union
-  for (const [key, path] of batched) {
-    context.fillStyle = palette.tone(Math.floor(key / 32) / 64, (key % 32) / 16)
-    context.fill(path)
-  }
-  context.globalCompositeOperation = 'source-over'
+  const finish = (): void => {
+    context.lineCap = 'round'
+    context.lineJoin = 'round'
 
-  // Brush strokes, finest first so a limb lies over the twigs at its fork.
-  const tooth = context.createPattern(toothTile(), 'repeat')
-  const toothSpace = textureMatrix(view, true)
-  brushes.sort((a, b) => a.width - b.width)
-  for (const brush of brushes) {
+    // Twigs first, light and fine; the brush strokes go on top. Where
+    // thousands of twigs crowd each square inch they are laid in as a wash of
+    // diluted ink rather than a solid black mass.
+    if (isGpu) {
+      const image = gpu.twigs(
+        frame,
+        {
+          law,
+          brushRadius,
+          promoteRadius,
+          coarseCut,
+          promoteCut,
+          maxTwigWidth: twigCeiling(frame, brushMin, promoteMin, isZoomed, coarseCut, promoteCut),
+          dilution,
+        },
+        context.canvas.width,
+        context.canvas.height,
+      )
+      if (image !== undefined) {
+        context.save()
+        context.setTransform(1, 0, 0, 1, 0, 0)
+        context.globalAlpha = 1
+        context.globalCompositeOperation = 'source-over'
+        context.drawImage(image, 0, 0)
+        context.restore()
+      }
+    }
+    for (let t = 0; t < TONE_CLASSES; t++) {
+      const recession = t / (TONE_CLASSES - 1)
+      const twigs = thin[t] as Array<Path2D | undefined>
+      for (let widthClass = 1; widthClass < twigs.length; widthClass++) {
+        const path = twigs[widthClass]
+        if (path === undefined) continue
+        const w = (widthClass * WIDTH_CLASS * dpr) / zoom
+        context.lineWidth = w
+        context.strokeStyle = palette.inkTint(coolness(2, recession), 1)
+        context.globalAlpha = inkDensity(w / dpr) * aerial(2, recession) * dilution
+        context.stroke(path)
+      }
+    }
+
+    // Promoted twigs without marks, a fill per tone; they are thinner than
+    // any brush stroke, so they go first.
     context.globalAlpha = 1
     context.globalCompositeOperation = palette.union
-    const tone = palette.tone(brush.density, brush.cool)
-    const { join } = brush
-    if (join !== undefined) {
-      // The branch starts in its parent's tone and eases into its own.
-      const gradient = context.createLinearGradient(join.x0, join.y0, join.x1, join.y1)
-      gradient.addColorStop(0, palette.tone(join.density, join.cool))
-      gradient.addColorStop(0.35, palette.tone(join.density, join.cool))
-      gradient.addColorStop(1, tone)
-      context.fillStyle = gradient
-    } else {
-      context.fillStyle = tone
-    }
-    context.fill(brush.body)
-    const marks = brush.marks
-    if (marks === undefined) continue
-    // Marks are made with the stroke's own ink: a pale, diluted stroke
-    // gets pale marks.
-    const strength = Math.min(1, brush.density / 0.7)
-    // Shade and bark are darks, light and dry brush are lights. On light
-    // paper darks add ink and lights lift it; in the dark theme the "ink"
-    // is a pale chalk, so the two swap: darks lift chalk, lights add it.
-    const darks: GlobalCompositeOperation = palette.isDark ? 'destination-out' : 'source-over'
-    const lights: GlobalCompositeOperation = palette.isDark ? 'source-over' : 'destination-out'
-    const ink = palette.inkTint(brush.cool * 0.6, 1)
-    context.fillStyle = ink
-    context.strokeStyle = ink
-    context.globalCompositeOperation = darks
-    // Volume: a broad half-shadow, then the core shadow inside it.
-    context.globalAlpha = 0.15 * strength
-    context.fill(marks.shadeBroad)
-    context.globalAlpha = 0.2 * strength
-    context.fill(marks.shadeCore)
-    // Wet edge: ink gathered where the stroke's water front dried.
-    context.globalAlpha = (palette.isDark ? 0.3 : 0.5) * strength ** 2
-    context.lineWidth = level.rim
-    context.stroke(marks.rim)
-    // Bark.
-    marks.fissures.forEach((path, k) => {
-      if (path === undefined || (level.octaves[k] ?? 0) <= 0) return
-      context.globalAlpha = (OCTAVES[k]?.alpha ?? 0.4) * (level.octaves[k] ?? 0) * strength
+    for (const [key, path] of batched) {
+      context.fillStyle = palette.tone(Math.floor(key / 32) / 64, (key % 32) / 16)
       context.fill(path)
-    })
-    if (marks.lenticels !== undefined) {
-      context.globalAlpha = 0.38 * level.lenticels * strength
-      context.fill(marks.lenticels)
-    }
-    // Light: ink lifted on the lit side and the lips of the fissures
-    // catching the light.
-    context.globalCompositeOperation = lights
-    context.globalAlpha = palette.isDark ? 0.06 : 0.075
-    context.fill(marks.light)
-    context.fill(marks.lightCore)
-    context.fill(marks.lightInner)
-    if (marks.ridges !== undefined) {
-      context.globalAlpha = 0.2 * level.ridges
-      context.fill(marks.ridges)
-    }
-    // Dry brush: the paper itself, whatever the theme, lifted through the
-    // paper's tooth, its grains dragged out along the stroke.
-    if (marks.dry !== undefined && tooth !== null) {
-      tooth.setTransform(toothSpace.rotate(brush.angle).scaleSelf(2.4 * dpr, 0.6 * dpr))
-      context.fillStyle = tooth
-      context.globalCompositeOperation = 'destination-out'
-      context.globalAlpha = 0.78
-      context.fill(marks.dry)
-      context.fillStyle = ink
     }
     context.globalCompositeOperation = 'source-over'
+
+    // Brush strokes, finest first so a limb lies over the twigs at its fork.
+    const tooth = context.createPattern(toothTile(), 'repeat')
+    const toothSpace = textureMatrix(view, true)
+    brushes.sort((a, b) => a.width - b.width)
+    for (const brush of brushes) {
+      context.globalAlpha = 1
+      context.globalCompositeOperation = palette.union
+      const tone = palette.tone(brush.density, brush.cool)
+      const { join } = brush
+      if (join !== undefined) {
+        // The branch starts in its parent's tone and eases into its own.
+        const gradient = context.createLinearGradient(join.x0, join.y0, join.x1, join.y1)
+        gradient.addColorStop(0, palette.tone(join.density, join.cool))
+        gradient.addColorStop(0.35, palette.tone(join.density, join.cool))
+        gradient.addColorStop(1, tone)
+        context.fillStyle = gradient
+      } else {
+        context.fillStyle = tone
+      }
+      context.fill(brush.body)
+      const marks = brush.marks
+      if (marks === undefined) continue
+      // Marks are made with the stroke's own ink: a pale, diluted stroke
+      // gets pale marks.
+      const strength = Math.min(1, brush.density / 0.7)
+      // Shade and bark are darks, light and dry brush are lights. On light
+      // paper darks add ink and lights lift it; in the dark theme the "ink"
+      // is a pale chalk, so the two swap: darks lift chalk, lights add it.
+      const darks: GlobalCompositeOperation = palette.isDark ? 'destination-out' : 'source-over'
+      const lights: GlobalCompositeOperation = palette.isDark ? 'source-over' : 'destination-out'
+      const ink = palette.inkTint(brush.cool * 0.6, 1)
+      context.fillStyle = ink
+      context.strokeStyle = ink
+      context.globalCompositeOperation = darks
+      // Volume: a broad half-shadow, then the core shadow inside it.
+      context.globalAlpha = 0.15 * strength
+      context.fill(marks.shadeBroad)
+      context.globalAlpha = 0.2 * strength
+      context.fill(marks.shadeCore)
+      // Wet edge: ink gathered where the stroke's water front dried.
+      context.globalAlpha = (palette.isDark ? 0.3 : 0.5) * strength ** 2
+      context.lineWidth = level.rim
+      context.stroke(marks.rim)
+      // Bark.
+      marks.fissures.forEach((path, k) => {
+        if (path === undefined || (level.octaves[k] ?? 0) <= 0) return
+        context.globalAlpha = (OCTAVES[k]?.alpha ?? 0.4) * (level.octaves[k] ?? 0) * strength
+        context.fill(path)
+      })
+      if (marks.lenticels !== undefined) {
+        context.globalAlpha = 0.38 * level.lenticels * strength
+        context.fill(marks.lenticels)
+      }
+      // Light: ink lifted on the lit side and the lips of the fissures
+      // catching the light.
+      context.globalCompositeOperation = lights
+      context.globalAlpha = palette.isDark ? 0.06 : 0.075
+      context.fill(marks.light)
+      context.fill(marks.lightCore)
+      context.fill(marks.lightInner)
+      if (marks.ridges !== undefined) {
+        context.globalAlpha = 0.2 * level.ridges
+        context.fill(marks.ridges)
+      }
+      // Dry brush: the paper itself, whatever the theme, lifted through the
+      // paper's tooth, its grains dragged out along the stroke.
+      if (marks.dry !== undefined && tooth !== null) {
+        tooth.setTransform(toothSpace.rotate(brush.angle).scaleSelf(2.4 * dpr, 0.6 * dpr))
+        context.fillStyle = tooth
+        context.globalCompositeOperation = 'destination-out'
+        context.globalAlpha = 0.78
+        context.fill(marks.dry)
+        context.fillStyle = ink
+      }
+      context.globalCompositeOperation = 'source-over'
+    }
+    context.globalAlpha = 1
   }
-  context.globalAlpha = 1
+
+  return { step: walk, finish }
+}
+
+/** A paint of the ink spread over tasks: see `beginInk`. */
+export interface InkJob {
+  readonly step: (deadline: number) => boolean
+  readonly finish: () => void
+}
+
+/** Paint the ink of `frame` at once. */
+export const paintInk = (context: CanvasRenderingContext2D, frame: Frame, gpu?: GpuInk): void => {
+  const job = beginInk(context, frame, gpu)
+  job.step(Number.POSITIVE_INFINITY)
+  job.finish()
+}
+
+/** The widest twig that can be on screen, plate px: narrower than a brush
+ *  stroke and, zoomed in, than a promoted twig, unless a budget ran out. */
+const twigCeiling = (frame: Frame, brushMin: number, promoteMin: number, isZoomed: boolean, coarseCut: number, promoteCut: number): number => {
+  const widest = frame.width(frame.topology.maxRadius)
+  if (Number.isFinite(coarseCut)) return widest
+  if (isZoomed && Number.isFinite(promoteMin) && !Number.isFinite(promoteCut)) return Math.min(widest, brushMin, promoteMin)
+  return Math.min(widest, brushMin)
 }
 
 /** Append samples for a straight piece from (x0, y0) to (x1, y1) to the
@@ -961,6 +1085,11 @@ const piece = (marks: Marks, m: number, options: PieceOptions) => {
     : options.isTwig
       ? level.edgeFine * Math.min(0.3 * dpr, cssWidth * dpr * 0.09)
       : level.edgeFine * 0.42 * dpr * smoothstep(5, 18, cssWidth)
+  pressureCurve.reset(seed)
+  leftCurve.reset(seed + 1)
+  rightCurve.reset(seed + 2)
+  leftFine.reset(seed + 21)
+  rightFine.reset(seed + 22)
   for (let i = 0; i < m; i++) {
     const a = i > 0 ? i - 1 : 0
     const b = i < m - 1 ? i + 1 : m - 1
@@ -973,14 +1102,14 @@ const piece = (marks: Marks, m: number, options: PieceOptions) => {
     ty[i] = dy
     lit[i] = litSide(dx, dy)
     const s = (fs[i] ?? 0) * css
-    const pressure = 1 + 0.08 * noise1(seed, s / 70)
+    const pressure = 1 + 0.08 * pressureCurve.at(s / 70)
     const half = (fw[i] ?? 0) * 0.5 * pressure
     const roughness = Math.min(0.14, 0.55 / Math.sqrt(half * css + 0.5))
-    let left = half * (1 + roughness * fbm1(seed + 1, s / 9)) + 0.1 * dpr
-    let right = half * (1 + roughness * fbm1(seed + 2, s / 9)) + 0.1 * dpr
+    let left = half * (1 + roughness * leftCurve.at(s / 9)) + 0.1 * dpr
+    let right = half * (1 + roughness * rightCurve.at(s / 9)) + 0.1 * dpr
     if (edgeFine > 0) {
-      left += edgeFine * noise1(seed + 21, s / 1.2)
-      right += edgeFine * noise1(seed + 22, s / 1.2)
+      left += edgeFine * leftFine.at(s / 1.2)
+      right += edgeFine * rightFine.at(s / 1.2)
     }
     hl[i] = left
     hr[i] = right
@@ -1046,9 +1175,11 @@ const piece = (marks: Marks, m: number, options: PieceOptions) => {
   // One wandering curve per side (two octaves: the band edges are brush
   // hairs, not ruled lines), shared by all its bands at different depths.
   for (const side of [1, -1] as const) {
+    bandBroad.reset(seed + 31 + side)
+    bandFine.reset(seed + 37 + side)
     for (let i = first; i < m; i++) {
       const s = (fs[i] ?? 0) * css
-      zs[i] = noise1(seed + 31 + side, s / 15) * 0.7 + noise1(seed + 37 + side, s / 5) * 0.3
+      zs[i] = bandBroad.at(s / 15) * 0.7 + bandFine.at(s / 5) * 0.3
       scratchAway[i] = smoothstep(0.05, 0.6, -side * (lit[i] ?? 0)) * (tr[i] ?? 0)
     }
     const shadeBand = (path: Path2D, outer: number, depth: number, wander: number, ramp: Float64Array) => {
@@ -1101,21 +1232,24 @@ const fissures = (marks: Marks, m: number, first: number, options: PieceOptions)
       const rank = hash2(tseed, 1) * 0.9 * cssWidth
       const u0 = -0.9 + (1.8 * (j + 0.5 + (hash2(tseed, 2) - 0.5) * 0.8)) / tracks
       let run = 0
+      trackRank.reset(tseed + 7)
+      trackDash.reset(tseed + 5)
+      trackWeave.reset(tseed + 3)
       for (let i = first; i < m; i = i === m - 1 ? m : Math.min(i + stride, m - 1)) {
         const t = tr[i] ?? 0
         let width = 0
         const s = (fs[i] ?? 0) * css
         // Where the stroke narrows past a fork, tracks end one by one, not
         // all on the same line.
-        if (t > 0.05 && (fw[i] ?? 0) * css > rank * (1 + 0.18 * noise1(tseed + 7, s / 23))) {
+        if (t > 0.05 && (fw[i] ?? 0) * css > rank * (1 + 0.18 * trackRank.at(s / 23))) {
           // The dash first: a fissure is off over most of its track, and
           // then nothing else needs working out.
-          const nz = noise1(tseed + 5, s / octave.dash) * 0.5 + 0.5
+          const nz = trackDash.at(s / octave.dash) * 0.5 + 0.5
           const furrow = zs[i] ?? 0
           const presence = k === 0 ? furrow : 0.4 + 0.6 * furrow
           // Shade only raises the chance (up to 0.4 × presence).
           if (nz > 1 - presence * 0.82) {
-            const u = clamp(u0 + weave * fbm1(tseed + 3, s / octave.weave), -0.95, 0.95)
+            const u = clamp(u0 + weave * trackWeave.at(s / octave.weave), -0.95, 0.95)
             const l = lit[i] ?? 0
             const sh = shade(u, l)
             const e = (nz - (1 - presence * (0.42 + 0.4 * sh))) / 0.16
@@ -1222,11 +1356,12 @@ const dryBrush = (marks: Marks, m: number, first: number, options: PieceOptions)
   const css = 1 / dpr
   const zoneSeed = seed + 7
   let isDry = false
+  dryZone.reset(zoneSeed)
   for (let i = first; i < m; i++) {
     const s = (fs[i] ?? 0) * css
     const along = total > 0 ? ((fs[i] ?? 0) - options.s0) / total : 0
     // Narrow strokes carry their ink better: they dry out less often.
-    const z = noise1(zoneSeed, s / 48) * 0.5 + 0.5 + along * 0.32 - 0.58 - 1.4 / cssWidth
+    const z = dryZone.at(s / 48) * 0.5 + 0.5 + along * 0.32 - 0.58 - 1.4 / cssWidth
     zs[i] = z
     if (z > 0) isDry = true
   }
@@ -1246,6 +1381,7 @@ const dryBrush = (marks: Marks, m: number, first: number, options: PieceOptions)
       const reach = 0.36 + 0.6 * Math.sqrt(hash2(bseed, 1))
       let run = 0
       let lastSide = 0
+      hairDash.reset(bseed + 3)
       for (let i = first; i < m; i++) {
         const l = lit[i] ?? 0
         const side = l > 0.15 ? 1 : l < -0.15 ? -1 : 0
@@ -1254,7 +1390,7 @@ const dryBrush = (marks: Marks, m: number, first: number, options: PieceOptions)
         const e =
           side === 0 || (tr[i] ?? 0) < 0.6 || intensity <= 0
             ? -1
-            : (Math.min(intensity, 0.8) - (noise1(bseed + 3, s / set.dash) * 0.5 + 0.5)) / 0.25
+            : (Math.min(intensity, 0.8) - (hairDash.at(s / set.dash) * 0.5 + 0.5)) / 0.25
         if (side !== lastSide && run > 0) {
           flushFissure(path, undefined, run)
           run = 0

@@ -3,14 +3,15 @@ import type { Segments2D } from '../core/geometry'
 import { GeometryStore } from '../engine/geometryStore'
 import type { Rect } from './camera'
 import { hasFoliage, paintFoliage } from './foliage'
-import { type Frame, type View, applyView, strokeWidthOf, widthScale } from './frame'
+import { type Frame, type View, applyView, isInView, strokeWidthOf, widthScale } from './frame'
+import type { GpuInk } from './gpuInk'
 import { paintGround } from './ground'
-import { paintInk } from './inkBrush'
+import { beginInk } from './inkBrush'
 import { paintLines } from './linePen'
 import type { Palette } from './palette'
 import type { RenderStyle } from './renderStyle'
 import type { RevealMode } from './revealMode'
-import { paintSeal } from './seal'
+import { paintSeal, sealImage } from './seal'
 import type { Season } from './season'
 
 /**
@@ -221,15 +222,38 @@ export interface Composition {
   readonly drawPaper: (context: CanvasRenderingContext2D) => void
   /** Clip `context` (identity transform) to where the painting may go. */
   readonly clip: (context: CanvasRenderingContext2D) => void
+  /** Draw the twigs (and the Line style's pens) on the GPU; the screen
+   *  only. Without it they are drawn on the canvas (the print). */
+  readonly gpu?: GpuInk | undefined
 }
 
 /** Paint the wash and ink layers for `frame` and lay them, with the seal,
  *  on the paper in `target`, inside the clip. */
 export const composePlate = (target: HTMLCanvasElement, layers: Layers, frame: Frame, composition: Composition): void => {
+  const job = beginPlate(target, layers, frame, composition)
+  while (!job.step(Number.POSITIVE_INFINITY)) {
+    // At once.
+  }
+}
+
+/**
+ * `composePlate` as a job that can be spread over several tasks, so a big
+ * repaint never blocks the page for long: each `step` works until
+ * `deadline` (a `performance.now()` time), or through one indivisible
+ * stage, and says whether the plate is done. The layers are the job's
+ * until then (anything else painting with them must cancel it), and
+ * `target` is only touched by the last step, in one go. The picture is
+ * the same however the steps fall.
+ */
+export interface PlateJob {
+  readonly step: (deadline: number) => boolean
+}
+
+export const beginPlate = (target: HTMLCanvasElement, layers: Layers, frame: Frame, composition: Composition): PlateJob => {
   const ink = layers.ink.getContext('2d')
   const out = target.getContext('2d')
-  if (ink === null || out === null) return
-  const { view, palette } = frame
+  if (ink === null || out === null) return { step: () => true }
+  const { view } = frame
   const { style, placement } = composition
   const isLine = style === 'Line'
   const isBranched = hasFoliage(frame)
@@ -237,14 +261,55 @@ export const composePlate = (target: HTMLCanvasElement, layers: Layers, frame: F
   ink.clearRect(0, 0, layers.ink.width, layers.ink.height)
   applyView(ink, view)
   if (isLine) {
-    paintLines(ink, frame)
-  } else {
-    paintInk(ink, frame)
-    // The ground goes on after the tree, so the trunk stands in it rather
-    // than on it.
-    if (isBranched) paintGround(ink, frame, placement)
+    paintLines(ink, frame, composition.gpu)
+    ink.setTransform(1, 0, 0, 1, 0, 0)
+    return { step: () => (finishPlate(ink, out, layers, frame, composition, isBranched), true) }
   }
-  ink.setTransform(1, 0, 0, 1, 0, 0)
+  const job = beginInk(ink, frame, composition.gpu)
+  let isWalked = false
+  let isSealReady = false
+  let isInked = false
+  return {
+    step: deadline => {
+      if (!isWalked) {
+        isWalked = job.step(deadline)
+        if (!isWalked || performance.now() > deadline) return false
+      }
+      if (!isSealReady) {
+        // Made (and cached) at this zoom in a step of its own.
+        const seal = visibleSeal(frame, composition)
+        if (seal !== undefined) sealImage(seal.size * view.zoom)
+        isSealReady = true
+        if (performance.now() > deadline) return false
+      }
+      if (!isInked) {
+        applyView(ink, view)
+        job.finish()
+        // The ground goes on after the tree, so the trunk stands in it
+        // rather than on it.
+        if (isBranched) paintGround(ink, frame, placement)
+        ink.setTransform(1, 0, 0, 1, 0, 0)
+        isInked = true
+        if (performance.now() > deadline) return false
+      }
+      finishPlate(ink, out, layers, frame, composition, isBranched)
+      return true
+    },
+  }
+}
+
+/** The foliage, then everything laid on the paper. */
+const finishPlate = (
+  ink: CanvasRenderingContext2D,
+  out: CanvasRenderingContext2D,
+  layers: Layers,
+  frame: Frame,
+  composition: Composition,
+  isBranched: boolean,
+): void => {
+  const { view, palette } = frame
+  const { style, placement } = composition
+  const isLine = style === 'Line'
   const isWashed = (style === 'Leaf' || style === 'Blossom') && isBranched
   const wash = isWashed ? layers.wash.getContext('2d') : null
   if (wash !== null && (style === 'Leaf' || style === 'Blossom')) {
@@ -299,12 +364,21 @@ export const composePlate = (target: HTMLCanvasElement, layers: Layers, frame: F
   out.drawImage(layers.ink, 0, 0)
   out.globalCompositeOperation = 'source-over'
   // The seal, pressed last; a technical drawing doesn't get one.
-  const seal = placement.seal
-  if (!isLine && seal !== undefined) {
+  const seal = visibleSeal(frame, composition)
+  if (seal !== undefined) {
     applyView(out, view)
     paintSeal(out, seal.x, seal.y, seal.size, view.zoom, palette.isDark)
     out.setTransform(1, 0, 0, 1, 0, 0)
   }
   out.restore()
   out.globalCompositeOperation = 'source-over'
+}
+
+/** The seal, if it is pressed on this plate and any of it is on screen:
+ *  at a deep zoom its image is big to make, so it is only made where it
+ *  shows. */
+const visibleSeal = (frame: Frame, composition: Composition): Placement['seal'] => {
+  const seal = composition.placement.seal
+  if (composition.style === 'Line' || seal === undefined) return undefined
+  return isInView(frame.view, seal.x, seal.y, seal.x + seal.size, seal.y + seal.size, seal.size * 0.1) ? seal : undefined
 }
