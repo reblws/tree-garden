@@ -20,7 +20,10 @@ export const BuildStats = Schema.Struct({
   iterationsApplied: Schema.Number,
   truncated: Schema.Boolean,
   preview: Schema.String,
+  /** Milliseconds of work: generation (parse, rewrite, turtle) plus the
+   *  branch topology, `topologyMs` of it. */
   elapsedMs: Schema.Number,
+  topologyMs: Schema.optionalKey(Schema.Number),
   /** Width ÷ height of the plant's box: which way its sheet turns
    *  (render/sheet.ts). */
   aspect: Schema.Number,

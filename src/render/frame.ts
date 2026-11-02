@@ -116,5 +116,44 @@ export const widthScale = (
   return { tip, exponent: Math.log(trunk / tip) / Math.log(maxRadius), isUnbranched: false }
 }
 
+/** Slots in the stroke width memo (a power of two). */
+const WIDTH_SLOTS = 1 << 13
+const widthKeys = new Float64Array(WIDTH_SLOTS).fill(Number.NaN)
+const widthValues = new Float64Array(WIDTH_SLOTS)
+let widthTip = Number.NaN
+let widthExponent = Number.NaN
+const hashFloat = new Float32Array(1)
+const hashBits = new Int32Array(hashFloat.buffer)
+
+/**
+ * `Frame.width` for a WidthScale: `tip * radius ** exponent`. Painters ask
+ * for it several times per segment, and a pipe radius is one of a few
+ * thousand values (`weight^(1/e)` for whole weights), so the widths are
+ * memoised in a direct-mapped table, kept while the scale stays the same
+ * (through a whole playback). A hit returns the very number the expression
+ * gave; a radius that misses is simply computed.
+ */
+export const strokeWidthOf = (widths: WidthScale): ((radius: number) => number) => {
+  const { tip, exponent } = widths
+  if (widths.isUnbranched) return () => tip
+  if (tip !== widthTip || exponent !== widthExponent) {
+    widthKeys.fill(Number.NaN)
+    widthTip = tip
+    widthExponent = exponent
+  }
+  return (radius: number) => {
+    hashFloat[0] = radius
+    const bits = hashBits[0] as number
+    const slot = (bits ^ (bits >>> 13)) & (WIDTH_SLOTS - 1)
+    if (widthKeys[slot] === radius && widthTip === tip && widthExponent === exponent) return widthValues[slot] as number
+    const width = tip * radius ** exponent
+    if (widthTip === tip && widthExponent === exponent) {
+      widthKeys[slot] = radius
+      widthValues[slot] = width
+    }
+    return width
+  }
+}
+
 export const clamp = (value: number, min: number, max: number): number =>
   value < min ? min : value > max ? max : value

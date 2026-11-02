@@ -13,32 +13,36 @@ import { PlateOrientation, aspectOf } from '../render/sheet'
 import { Message } from './message'
 import { reportPrintBand } from './printProgress'
 
-/** Grow the plant for `params`, put the geometry in the store under
- *  `buildId`, and report the stats back to update. */
+/** Grow the plant for `params` (in the generator's worker), put the
+ *  geometry in the store under `buildId`, and report the stats back to
+ *  update. A build superseded by a newer one reports only that. */
 export const Generate = Command.define('Generate', {
   args: { buildId: Schema.Number, params: LSystemParams },
-  messages: [Message.CompletedGenerate, Message.FailedGenerate],
+  messages: [Message.CompletedGenerate, Message.FailedGenerate, Message.SupersededGenerate],
   execute: ({ buildId, params }) =>
-    Effect.gen(function* () {
-      const startedAt = performance.now()
-      const result = yield* generateLSystem(params)
-      if (!result.ok) {
-        return Message.FailedGenerate({ buildId, errors: result.errors })
-      }
-      GeometryStore.set(buildId, result.geometry)
-      return Message.CompletedGenerate({
-        stats: {
-          buildId,
-          symbolCount: result.symbolCount,
-          segmentCount: result.geometry.count,
-          iterationsApplied: result.iterationsApplied,
-          truncated: result.truncated,
-          preview: result.preview,
-          elapsedMs: performance.now() - startedAt,
-          aspect: aspectOf(result.geometry.bounds),
-        },
-      })
-    }),
+    generateLSystem(params).pipe(
+      Effect.map(result => {
+        if (!result.ok) {
+          return Message.FailedGenerate({ buildId, errors: result.errors })
+        }
+        GeometryStore.set(buildId, result.geometry)
+        return Message.CompletedGenerate({
+          stats: {
+            buildId,
+            symbolCount: result.symbolCount,
+            segmentCount: result.geometry.count,
+            iterationsApplied: result.iterationsApplied,
+            truncated: result.truncated,
+            preview: result.preview,
+            // The work itself, wherever it ran: generation and topology.
+            elapsedMs: result.timing.generateMs + result.timing.topologyMs,
+            topologyMs: result.timing.topologyMs,
+            aspect: aspectOf(result.geometry.bounds),
+          },
+        })
+      }),
+      Effect.catchTag('Superseded', () => Effect.succeed(Message.SupersededGenerate({ buildId }))),
+    ),
 })
 
 const SEED_WORDS = ['oak', 'ash', 'elm', 'yew', 'fir', 'birch', 'alder', 'aspen', 'cedar', 'larch', 'maple', 'rowan', 'willow', 'hazel', 'linden']

@@ -1,6 +1,11 @@
 import { Runtime } from 'foldkit'
 
+import { startLSystemWorker } from './engine/lsystem'
 import { Message, Model, init, subscriptions, update, view } from './ui/main'
+
+// The generator's worker starts loading now, alongside the app, so it is
+// ready by the first build.
+startLSystemWorker()
 
 const application = Runtime.makeApplication({
   Model,

@@ -29,6 +29,8 @@ export const Message = defineMessageUnion({
   // Generation results.
   CompletedGenerate: { stats: BuildStats },
   FailedGenerate: { buildId: Schema.Number, errors: Schema.Array(ParseError) },
+  /** A newer build was requested before this one finished: it was dropped. */
+  SupersededGenerate: { buildId: Schema.Number },
 
   // Playback.
   ClickedTogglePlay: {},
