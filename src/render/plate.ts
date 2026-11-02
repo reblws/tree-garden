@@ -57,13 +57,17 @@ export interface Placement {
   readonly seal: { readonly x: number; readonly y: number; readonly size: number } | undefined
 }
 
-/** Share of the spare vertical room that goes below the plant. */
+/** Share of the spare vertical room that goes below the plant: a plant
+ *  rests low, with room for its ground; a figure with no ground (Koch,
+ *  Sierpinski) is set at the optical centre, a little above the middle. */
 const GROUND = 0.3
+const OPTICAL_CENTRE = 0.54
 
 /**
  * Fit the plant inside `margins` on a `width` × `height` canvas.
  *
- * Composition: vertically the plant rests low, with room for its ground.
+ * Composition: vertically the plant rests low, with room for its ground;
+ * an unbranched figure, which has no ground, sits at the optical centre.
  * Across, it is placed by its ink rather than its box: halfway between the
  * box's centre and the centre of its mass (segments weighted by length
  * and thickness), so a leaning crown keeps air on the side it reaches
@@ -116,7 +120,7 @@ const computePlacement = (geometry: Segments2D, width: number, height: number, m
   offsetX = Math.min(offsetX, width - margins.right - maxX * scale)
   offsetX = Math.max(offsetX, margins.left - minX * scale)
   const spareY = availH - spanY * scale
-  const offsetY = height - margins.bottom - spareY * GROUND + minY * scale
+  const offsetY = height - margins.bottom - spareY * (isBranched ? GROUND : OPTICAL_CENTRE) + minY * scale
 
   const root = isBranched ? { x: offsetX + rootX * scale, y: offsetY - rootY * scale } : undefined
   // The seal: in the lower corner away from the mass, at about the height

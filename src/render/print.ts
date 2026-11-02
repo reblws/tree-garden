@@ -7,6 +7,7 @@ import { paintPaper } from './paper'
 import { buildFrame, composePlate, placePlant } from './plate'
 import type { RenderStyle } from './renderStyle'
 import type { Season } from './season'
+import { type PlateOrientation, type Rect, plateMargins, printMark } from './sheet'
 
 /**
  * The print: the plate rendered off screen at 300 dpi on a standard sheet,
@@ -56,6 +57,9 @@ export interface PrintRequest {
   readonly style: RenderStyle
   readonly season: Season
   readonly size: PrintSize
+  /** Which way the sheet is turned (sheet.ts `orientationOf`), as on
+   *  screen. */
+  readonly orientation: PlateOrientation
   /** Pencilled under the plate mark: left, centre, right. */
   readonly inscriptions: readonly [string, string, string]
 }
@@ -66,37 +70,17 @@ const nextTask = () => new Promise<void>(resolve => setTimeout(resolve, 0))
 export const renderPrint = async (request: PrintRequest): Promise<Blob> => {
   const { geometry, style, season } = request
   const portrait = printPixels(request.size)
-  // Landscape for plants much wider than tall.
-  const { minX, minY, maxX, maxY } = geometry.bounds
-  const isLandscape = (maxX - minX) / Math.max(maxY - minY, 1e-6) > 1.25
+  const isLandscape = request.orientation === 'Landscape'
   const width = isLandscape ? portrait.height : portrait.width
   const height = isLandscape ? portrait.width : portrait.height
   const dpr = Math.max(width, height) / VIRTUAL_LONG_SIDE
   const palette = printPalette()
 
-  // The plate mark, inset from the sheet; deeper at the foot, where the
-  // inscriptions go.
+  // The plate mark, and the plant inside it with the same margins as on
+  // screen (sheet.ts).
   const short = Math.min(width, height)
-  const side = Math.round(short * 0.095)
-  const plate = {
-    x: side,
-    y: Math.round(short * 0.09),
-    width: width - 2 * side,
-    height: height - Math.round(short * 0.09) - Math.round(short * 0.155),
-  }
-  const inner = Math.min(plate.width, plate.height) * 0.075
-  const placement = placePlant(
-    geometry,
-    width,
-    height,
-    {
-      left: plate.x + inner,
-      top: plate.y + inner,
-      right: width - plate.x - plate.width + inner,
-      bottom: height - plate.y - plate.height + inner * 1.5,
-    },
-    short * 0.026,
-  )
+  const plate = printMark(width, height)
+  const placement = placePlant(geometry, width, height, plateMargins(plate, width, height), short * 0.026)
 
   const output = document.createElement('canvas')
   output.width = width
@@ -171,13 +155,6 @@ export const renderPrint = async (request: PrintRequest): Promise<Blob> => {
   output.height = 1
   if (blob === null) throw new Error('The browser could not encode the print')
   return withResolution(blob, DPI)
-}
-
-interface Rect {
-  readonly x: number
-  readonly y: number
-  readonly width: number
-  readonly height: number
 }
 
 /**

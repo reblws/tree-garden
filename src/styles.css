@@ -300,6 +300,7 @@ html {
   /* THE SHEET: paper lifted off the page, with an etcher's plate mark. */
   .sheet {
     position: relative;
+    container: sheet / inline-size;
     background: var(--plate-paper);
     box-shadow: var(--sheet-shadow);
   }
@@ -400,15 +401,136 @@ html {
       inset: -9px -3px;
     }
   }
-  .inscription {
+  /* INSCRIPTIONS: pencil in the foot of the sheet. The title stays whole
+     in the middle; the source and the numbers share what is left and
+     give way with an ellipsis, and on a narrow sheet the source goes (it
+     is still on the print). */
+  .inscriptions {
     position: absolute;
+    left: calc(var(--plate-mark-side) + 6px);
+    right: calc(var(--plate-mark-side) + 6px);
     bottom: 12px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    column-gap: 1rem;
+    pointer-events: none;
+  }
+  .inscription {
     font-family: var(--font-serif);
     font-style: italic;
     font-size: 13px;
     color: color-mix(in srgb, var(--plate-ink) 55%, var(--plate-paper));
-    pointer-events: none;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .inscription-numbers {
+    text-align: right;
+  }
+  @container sheet (max-width: 26rem) {
+    .inscription-source {
+      visibility: hidden;
+    }
+  }
+
+  /* THE FOLIO: masthead, stage and rail. Narrow screens stack them, the
+     sheet straight after the title; wide ones hold the stage at the
+     window's height on the left while the rail (masthead, controls,
+     record) scrolls beside it. */
+  .folio {
+    --folio-top: 1.5rem;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'masthead' 'stage' 'lede' 'rail';
+    row-gap: 1.75rem;
+    max-width: 100rem;
+    margin-inline: auto;
+    padding: 1.25rem 1.25rem 3rem;
+  }
+  .masthead {
+    grid-area: masthead;
+    padding-bottom: 1.25rem;
+    border-bottom: 1px solid var(--rule);
+  }
+  .lede {
+    grid-area: lede;
+  }
+  .rail {
+    grid-area: rail;
+    min-width: 0;
+  }
+  @media (min-width: 640px) {
+    .folio {
+      row-gap: 2rem;
+      padding: 2rem 2.5rem 3rem;
+    }
+  }
+  @media (min-width: 1000px) and (min-aspect-ratio: 11/10) {
+    .folio {
+      grid-template-columns: minmax(0, 1fr) 20rem;
+      grid-template-rows: auto auto 1fr;
+      grid-template-areas: 'stage masthead' 'stage lede' 'stage rail';
+      column-gap: clamp(2.5rem, 4vw, 4rem);
+      row-gap: 0;
+      padding: var(--folio-top) 2.5rem 3rem;
+    }
+    .masthead {
+      padding: 0.5rem 0 0;
+      border-bottom: 0;
+    }
+    .lede {
+      margin: 1.25rem 0 2.5rem;
+      padding-bottom: 2rem;
+      border-bottom: 1px solid var(--rule);
+      font-size: 15px;
+    }
+  }
+
+  /* THE STAGE: the sheet as tall as the window allows (never under 32rem;
+     a shorter window scrolls), as wide as its orientation makes it, and
+     the transport under it at the same width. The sheet is sized so its
+     plate mark has the print's proportions, whatever the mark's inset:
+     --mark-ratio, height ÷ width, which the view sets on the stage from
+     render/sheet.ts (MARK_RATIO) for the orientation. A landscape
+     sheet is also held to the stage's width, and to 1100px. */
+  .stage {
+    grid-area: stage;
+    container: stage / inline-size;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    --stage-h: clamp(32rem, 100svh - 14rem, 72rem);
+    --mark-x: calc(2 * var(--plate-mark-side));
+    --mark-y: calc(var(--plate-mark-top) + var(--plate-mark-bottom));
+    --sheet-h: min(var(--stage-h), (min(100cqw, 1100px) - var(--mark-x)) * var(--mark-ratio) + var(--mark-y));
+    --sheet-w: calc((var(--sheet-h) - var(--mark-y)) / var(--mark-ratio) + var(--mark-x));
+  }
+  .stage > .sheet {
+    flex: none;
+    width: var(--sheet-w);
+    height: var(--sheet-h);
+  }
+  .transport {
+    width: var(--sheet-w);
+    max-width: 100%;
+  }
+  @media (min-width: 1000px) and (min-aspect-ratio: 11/10) {
+    .stage {
+      align-self: start;
+      /* The window less the folio's top and bottom, the gap and the
+         transport. */
+      --stage-h: clamp(32rem, 100svh - 2 * var(--folio-top) - 1rem - 2.125rem, 72rem);
+    }
+  }
+  /* Held in place only while the whole stage fits the window; otherwise
+     it scrolls with the page, so nothing is ever out of reach. */
+  @media (min-width: 1000px) and (min-aspect-ratio: 11/10) and (min-height: 38.5rem) {
+    .stage {
+      position: sticky;
+      top: var(--folio-top);
+    }
   }
 
   /* DETAILS: small capitals with a drawn plus that turns into a minus. */

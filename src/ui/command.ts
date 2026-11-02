@@ -8,6 +8,7 @@ import { LSystemParams } from '../params/lsystem'
 import { PrintSize, downloadPrint } from '../render/print'
 import { RenderStyle } from '../render/renderStyle'
 import { Season } from '../render/season'
+import { PlateOrientation, aspectOf } from '../render/sheet'
 import { Message } from './message'
 
 /** Grow the plant for `params`, put the geometry in the store under
@@ -32,6 +33,7 @@ export const Generate = Command.define('Generate', {
           truncated: result.truncated,
           preview: result.preview,
           elapsedMs: performance.now() - startedAt,
+          aspect: aspectOf(result.geometry.bounds),
         },
       })
     }),
@@ -83,18 +85,19 @@ export const DownloadPrint = Command.define('DownloadPrint', {
   args: {
     buildId: Schema.Number,
     size: PrintSize,
+    orientation: PlateOrientation,
     style: RenderStyle,
     season: Season,
     inscriptions: Schema.Tuple([Schema.String, Schema.String, Schema.String]),
     fileName: Schema.String,
   },
   messages: [Message.CompletedPrint, Message.FailedPrint],
-  execute: ({ buildId, size, style, season, inscriptions, fileName }) =>
+  execute: ({ buildId, size, orientation, style, season, inscriptions, fileName }) =>
     Effect.tryPromise({
       try: async () => {
         const geometry = GeometryStore.get(buildId)
         if (geometry === undefined) throw new Error('The plant is no longer in memory')
-        await downloadPrint({ geometry, style, season, size, inscriptions }, fileName)
+        await downloadPrint({ geometry, style, season, size, orientation, inscriptions }, fileName)
       },
       catch: error => (error instanceof Error ? error.message : String(error)),
     }).pipe(

@@ -21,6 +21,8 @@ const initialModel: Model = {
   renderStyle: 'Ink',
   season: 'Summer',
   camera: fitCamera,
+  orientation: 'Portrait',
+  isEditing: false,
   isLinkCopied: false,
   printSize: 'A3',
   printStatus: 'Idle',
@@ -28,7 +30,8 @@ const initialModel: Model = {
 
 const zoomed: Camera = { zoom: 4, x: 0.3, y: 0.6 }
 
-const stats = (buildId: number): BuildStats => ({
+/** A plant as tall as Fractal plant's (width ÷ height 0.68) unless said. */
+const stats = (buildId: number, aspect = 0.68): BuildStats => ({
   buildId,
   symbolCount: 100,
   segmentCount: 40,
@@ -36,7 +39,10 @@ const stats = (buildId: number): BuildStats => ({
   truncated: false,
   preview: 'F[+F]',
   elapsedMs: 1,
+  aspect,
 })
+/** As wide as Koch's snowflake: it wants a landscape sheet. */
+const WIDE = 1.15
 
 describe('update', () => {
   test('dragging a slider regenerates without touching the URL; releasing writes it', () => {
@@ -249,6 +255,7 @@ describe('update', () => {
         DownloadPrint({
           buildId: 1,
           size: 'A2',
+          orientation: 'Portrait',
           style: 'Blossom',
           season: 'Summer',
           inscriptions: ['ABOP fig. 1.24f', 'Fractal plant', 'n 5 · δ 22.5° · oak'],
@@ -289,6 +296,106 @@ describe('update', () => {
       message(Message.ClickedDownloadPrint()),
       model(model => expect(model.printStatus).toBe('Idle')),
       Command.expectNone(),
+    )
+  })
+  test('a wide plant turns the sheet when it arrives, and a tall one turns it back', () => {
+    const koch = presets.find(preset => preset.id === 'koch-snowflake')
+    if (koch === undefined) throw new Error('no Koch preset')
+    story(
+      update,
+      given(initialModel),
+      message(Message.SelectedPreset({ presetId: koch.id })),
+      model(model => expect(model.orientation).toBe('Portrait')),
+      Command.resolveAll(
+        [Generate, Message.CompletedGenerate({ stats: stats(2, WIDE) })],
+        [ReplaceUrl, Message.CompletedReplaceUrl()],
+      ),
+      model(model => expect(model.orientation).toBe('Landscape')),
+      message(Message.SelectedPreset({ presetId: defaultPreset.id })),
+      Command.resolveAll(
+        [Generate, Message.CompletedGenerate({ stats: stats(3) })],
+        [ReplaceUrl, Message.CompletedReplaceUrl()],
+      ),
+      model(model => expect(model.orientation).toBe('Portrait')),
+    )
+  })
+
+  test('the sheet never turns under a dragging slider: only once the edit is committed', () => {
+    story(
+      update,
+      given(modifyFields(initialModel, { shown: () => Option.some(stats(1)) })),
+      message(Message.ChangedAngle({ value: 50 })),
+      model(model => expect(model.isEditing).toBe(true)),
+      Command.resolve(Generate, Message.CompletedGenerate({ stats: stats(2, WIDE) })),
+      model(model => expect(model.orientation).toBe('Portrait')),
+      message(Message.ChangedAngle({ value: 55 })),
+      Command.resolve(Generate, Message.CompletedGenerate({ stats: stats(3, WIDE) })),
+      model(model => expect(model.orientation).toBe('Portrait')),
+      message(Message.CommittedEdit()),
+      model(model => expect(model).toMatchObject({ isEditing: false, orientation: 'Landscape' })),
+      Command.resolve(ReplaceUrl, Message.CompletedReplaceUrl()),
+    )
+  })
+
+  test('a turn waits while the view is zoomed in, and happens on the way back to Fit', () => {
+    story(
+      update,
+      given(modifyFields(initialModel, { shown: () => Option.some(stats(1)), camera: () => zoomed })),
+      message(Message.ChangedAngle({ value: 50 })),
+      Command.resolve(Generate, Message.CompletedGenerate({ stats: stats(2, WIDE) })),
+      message(Message.CommittedEdit()),
+      Command.resolve(ReplaceUrl, Message.CompletedReplaceUrl()),
+      model(model => {
+        expect(model.orientation).toBe('Portrait')
+        expect(model.camera).toEqual(zoomed)
+      }),
+      message(Message.ClickedZoom({ step: 'Out' })),
+      model(model => expect(model.orientation).toBe('Portrait')),
+      message(Message.ClickedZoom({ step: 'Fit' })),
+      model(model => expect(model).toMatchObject({ camera: fitCamera, orientation: 'Landscape' })),
+    )
+  })
+
+  test('a gesture that ends at the fitted view lets a waiting turn happen', () => {
+    story(
+      update,
+      given(
+        modifyFields(initialModel, {
+          shown: () => Option.some(stats(1, WIDE)),
+          camera: () => zoomed,
+        }),
+      ),
+      message(Message.MovedCamera({ camera: fitCamera })),
+      model(model => expect(model.orientation).toBe('Portrait')),
+      message(Message.SettledCamera({ camera: fitCamera })),
+      model(model => expect(model.orientation).toBe('Landscape')),
+    )
+  })
+
+  test('a wide plant prints landscape, even while the screen is still waiting to turn', () => {
+    story(
+      update,
+      given(
+        modifyFields(initialModel, {
+          presetId: () => 'koch-snowflake',
+          shown: () => Option.some(stats(1, WIDE)),
+          camera: () => zoomed,
+        }),
+      ),
+      message(Message.ClickedDownloadPrint()),
+      model(model => expect(model.orientation).toBe('Portrait')),
+      Command.expectHas(
+        DownloadPrint({
+          buildId: 1,
+          size: 'A3',
+          orientation: 'Landscape',
+          style: 'Ink',
+          season: 'Summer',
+          inscriptions: ['Classic fractal', 'Koch snowflake', 'n 5 · δ 22.5° · oak'],
+          fileName: 'tree-garden-koch-snowflake-oak-ink-a3.png',
+        }),
+      ),
+      Command.resolve(DownloadPrint, Message.CompletedPrint()),
     )
   })
 })

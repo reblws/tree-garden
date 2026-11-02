@@ -43,6 +43,8 @@ export const init: Runtime.RoutingApplicationInit<Model, Message> = (url: Url) =
       renderStyle: 'Leaf',
       season: 'Summer',
       camera: fitCamera,
+      orientation: 'Portrait',
+      isEditing: false,
       isLinkCopied: false,
       printSize: 'A3',
       printStatus: 'Idle',

@@ -25,6 +25,7 @@ import { type Palette, readPalette } from './palette'
 import { paintPaper } from './paper'
 import { type Placement, buildFrame, composePlate, placePlant } from './plate'
 import { RenderStyle } from './renderStyle'
+import { plateMargins } from './sheet'
 import { RevealMode } from './revealMode'
 import { Season } from './season'
 
@@ -63,12 +64,6 @@ import { Season } from './season'
  */
 
 const TAG = 'tree-canvas'
-/** Margin around the plant, as a share of the canvas's shorter side. */
-const MARGIN = 0.085
-const MIN_MARGIN_PX = 28
-/** Extra room at the foot of the sheet, CSS pixels, where the page
- *  pencils its inscriptions (see `.inscription` in styles.css). */
-const FOOT_PX = 26
 /** Above this many segments, playback frames are drafts (see Frame). */
 const DRAFT_SEGMENTS = 60_000
 /** The seal's side, as a share of the canvas's shorter side. */
@@ -471,7 +466,7 @@ class TreeCanvasElement extends HTMLElement {
       return
     }
 
-    const placement = this.#place(geometry, dpr)
+    const placement = this.#place(geometry)
     const base = `${this.#buildId}|${width}x${height}|${this.#style}|${this.#season}|${palette.key}`
     let kind: typeof this.lastDrawKind = 'cached'
     if (this.#progress >= 1 && isFit(camera)) {
@@ -519,7 +514,7 @@ class TreeCanvasElement extends HTMLElement {
       if (geometry === undefined || palette === undefined || current !== base || this.#fitFinalKey === base) return
       if (this.#progress < 1 || this.#isMoving(performance.now())) return
       const paper: Paper = { image: this.#fitPaperFor(width, height, dpr, palette), view: IDENTITY }
-      const placement = this.#place(geometry, dpr)
+      const placement = this.#place(geometry)
       this.#compose(this.#fitFinal, paper, this.#frameFor(geometry, palette, dpr, placement, fitCamera), placement)
       this.#fitFinalKey = base
     }
@@ -630,16 +625,16 @@ class TreeCanvasElement extends HTMLElement {
     })
   }
 
-  /** Fit the plant with a print-like margin, resting low on the sheet
-   *  (see placePlant). Also keeps the plant's box for the camera's clamp. */
-  #place(geometry: Segments2D, dpr: number): Placement {
+  /** Fit the plant inside the plate mark with the print's margins
+   *  (sheet.ts), resting low on the sheet (see placePlant). Also keeps the
+   *  plant's box for the camera's clamp. */
+  #place(geometry: Segments2D): Placement {
     const { width, height } = this.#canvas
-    const margin = Math.max(MIN_MARGIN_PX * dpr, Math.min(width, height) * MARGIN)
     const placement = placePlant(
       geometry,
       width,
       height,
-      { left: margin, top: margin, right: margin, bottom: margin + FOOT_PX * dpr },
+      plateMargins(this.#plateRect(width, height), width, height),
       Math.min(width, height) * SEAL,
     )
     this.#focus = placement.focus

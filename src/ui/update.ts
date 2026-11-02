@@ -6,7 +6,8 @@ import { toString as urlToString } from 'foldkit/url'
 
 import { type LSystemParams, paramsToSearch } from '../params/lsystem'
 import { findPreset } from '../params/presets'
-import { clampCamera, fitCamera, stepPan, stepZoom } from '../render/camera'
+import { clampCamera, fitCamera, isFit, stepPan, stepZoom } from '../render/camera'
+import { orientationOf } from '../render/sheet'
 import { CopyLink, DownloadPrint, Generate, LoadExternal, NavigateInternal, NewSeed, ReplaceUrl } from './command'
 import { inscriptionsOf, printFileName } from './inscriptions'
 import { Message } from './message'
@@ -26,7 +27,34 @@ interface RebuildOptions {
   readonly replay: boolean
   /** Write the new params to the URL now. */
   readonly commit: boolean
+  /** A live edit (a slider under the finger, a field being typed in),
+   *  not yet committed: the sheet keeps its orientation until it is. */
+  readonly isEdit: boolean
 }
+
+/**
+ * Turn the sheet to suit the plant on screen, if now is a quiet moment:
+ * no edit under way and the view fitted. Called after anything that can
+ * end such a moment (a build landing, an edit committed, the view going
+ * back to Fit), so a turn that had to wait happens as soon as it can.
+ * The camera is plate-relative; at the fitted view there is nothing for
+ * the turn to move.
+ */
+const settleSheet = (model: Model): Model =>
+  model.isEditing || !isFit(model.camera)
+    ? model
+    : Option.match(model.shown, {
+        onNone: () => model,
+        onSome: stats => {
+          const orientation = orientationOf(stats.aspect)
+          return orientation === model.orientation ? model : modifyFields(model, { orientation: () => orientation })
+        },
+      })
+
+/** Update the camera, then settle the sheet if the view came back to Fit. */
+const moveCamera = (model: Model, next: (camera: Model['camera']) => Model['camera']): UpdateReturn => ({
+  model: settleSheet(modifyFields(model, { camera: next })),
+})
 
 /** Request a new build for `params`. The previous build stays on screen
  *  until the new one completes. */
@@ -41,6 +69,7 @@ const rebuild = (model: Model, params: LSystemParams, options: RebuildOptions): 
       params: () => params,
       presetId: () => options.presetId,
       latestBuildId: () => buildId,
+      isEditing: () => options.isEdit,
       isLinkCopied: () => false,
       playback: playback =>
         options.replay ? { ...playback, progress: 0, isPlaying: true } : playback,
@@ -56,7 +85,7 @@ const rebuild = (model: Model, params: LSystemParams, options: RebuildOptions): 
 /** A live edit of one parameter: regenerate, mark as custom, don't touch the
  *  URL until the edit is committed. */
 const edit = (model: Model, change: Partial<LSystemParams>): UpdateReturn =>
-  rebuild(model, { ...model.params, ...change }, { presetId: '', replay: false, commit: false })
+  rebuild(model, { ...model.params, ...change }, { presetId: '', replay: false, commit: false, isEdit: true })
 
 export const update = (model: Model, message: Message) =>
   Message.match<UpdateReturn>(message, {
@@ -68,7 +97,7 @@ export const update = (model: Model, message: Message) =>
       return rebuild(
         model,
         { ...preset.params, seed: model.params.seed },
-        { presetId, replay: true, commit: true },
+        { presetId, replay: true, commit: true, isEdit: false },
       )
     },
     ChangedAxiom: ({ value }) => edit(model, { axiom: value }),
@@ -79,25 +108,28 @@ export const update = (model: Model, message: Message) =>
     // The seed doesn't make the params custom: a preset with another seed is
     // still that preset.
     ChangedSeed: ({ value }) =>
-      rebuild(model, { ...model.params, seed: value }, { presetId: model.presetId, replay: false, commit: false }),
+      rebuild(model, { ...model.params, seed: value }, { presetId: model.presetId, replay: false, commit: false, isEdit: true }),
 
+    // The edit is over: the sheet may turn to suit the plant now.
     CommittedEdit: () => ({
-      model,
+      model: settleSheet(modifyFields(model, { isEditing: () => false })),
       commands: [ReplaceUrl({ search: paramsToSearch(model.params) })],
     }),
 
     ClickedNewSeed: () => ({ model, commands: [NewSeed()] }),
     GotNewSeed: ({ seed }) =>
-      rebuild(model, { ...model.params, seed }, { presetId: model.presetId, replay: true, commit: true }),
+      rebuild(model, { ...model.params, seed }, { presetId: model.presetId, replay: true, commit: true, isEdit: false }),
 
     CompletedGenerate: ({ stats }) =>
       stats.buildId !== model.latestBuildId
         ? { model }
         : {
-            model: modifyFields(model, {
-              shown: () => Option.some(stats),
-              errors: () => [],
-            }),
+            model: settleSheet(
+              modifyFields(model, {
+                shown: () => Option.some(stats),
+                errors: () => [],
+              }),
+            ),
           },
 
     FailedGenerate: ({ buildId, errors }) =>
@@ -156,21 +188,15 @@ export const update = (model: Model, message: Message) =>
     MovedCamera: ({ camera }) => ({
       model: modifyFields(model, { camera: () => clampCamera(camera) }),
     }),
-    SettledCamera: ({ camera }) => ({
-      model: modifyFields(model, { camera: () => clampCamera(camera) }),
-    }),
-    ClickedZoom: ({ step }) => ({
-      model: modifyFields(model, { camera: camera => stepZoom(camera, step) }),
-    }),
-    PressedZoomKey: ({ step }) => ({
-      model: modifyFields(model, { camera: camera => stepZoom(camera, step) }),
-    }),
+    // A turn of the sheet that waited for the fitted view happens when
+    // the view gets back there.
+    SettledCamera: ({ camera }) => moveCamera(model, () => clampCamera(camera)),
+    ClickedZoom: ({ step }) => moveCamera(model, camera => stepZoom(camera, step)),
+    PressedZoomKey: ({ step }) => moveCamera(model, camera => stepZoom(camera, step)),
     PressedPanKey: ({ step }) => ({
       model: modifyFields(model, { camera: camera => stepPan(camera, step) }),
     }),
-    DoubleClickedCanvas: () => ({
-      model: modifyFields(model, { camera: () => fitCamera }),
-    }),
+    DoubleClickedCanvas: () => moveCamera(model, () => fitCamera),
 
     SelectedPrintSize: ({ size }) => ({
       model: modifyFields(model, {
@@ -191,6 +217,10 @@ export const update = (model: Model, message: Message) =>
                   DownloadPrint({
                     buildId: stats.buildId,
                     size: model.printSize,
+                    // From the plant, not the screen: the same link always
+                    // prints the same way, even while the screen's turn
+                    // waits for an edit or a zoom to end.
+                    orientation: orientationOf(stats.aspect),
                     style: model.renderStyle,
                     season: model.season,
                     inscriptions: inscriptionsOf(model, true),

@@ -6,6 +6,7 @@ import { PrintSize } from '../render/print'
 import { RenderStyle } from '../render/renderStyle'
 import { RevealMode } from '../render/revealMode'
 import { Season } from '../render/season'
+import { PlateOrientation } from '../render/sheet'
 
 export const ParseError = Schema.Struct({ line: Schema.Number, message: Schema.String })
 export type ParseError = typeof ParseError.Type
@@ -20,6 +21,9 @@ export const BuildStats = Schema.Struct({
   truncated: Schema.Boolean,
   preview: Schema.String,
   elapsedMs: Schema.Number,
+  /** Width ÷ height of the plant's box: which way its sheet turns
+   *  (render/sheet.ts). */
+  aspect: Schema.Number,
 })
 export type BuildStats = typeof BuildStats.Type
 
@@ -57,6 +61,14 @@ export const Model = Schema.Struct({
    *  numbers, plate-relative, so they survive resizes and rebuilds. A
    *  viewing choice, so not part of the link. */
   camera: Camera,
+  /** Which way the sheet on screen is turned. It follows the plant shown
+   *  (`orientationOf`), but only once an edit is committed and the view is
+   *  fitted, so it never turns under a dragging slider or a zoomed view.
+   *  A viewing state, so not part of the link. */
+  orientation: PlateOrientation,
+  /** A slider is being dragged or a field typed in: the edit isn't
+   *  committed yet, so the sheet keeps its orientation. */
+  isEditing: Schema.Boolean,
   isLinkCopied: Schema.Boolean,
   /** The sheet the print is made for. A choice of output, not of the
    *  plant, so not part of the link. */

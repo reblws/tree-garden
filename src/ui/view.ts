@@ -8,6 +8,7 @@ import { type PrintSize, printPixels } from '../render/print'
 import type { RenderStyle } from '../render/renderStyle'
 import type { RevealMode } from '../render/revealMode'
 import type { Season } from '../render/season'
+import { MARK_RATIO } from '../render/sheet'
 import { treeCanvas } from '../render/treeCanvas'
 import { formatAngle, inscriptionsOf } from './inscriptions'
 import { Message } from './message'
@@ -131,6 +132,7 @@ const controls = (h: H, model: Model): Html => {
     [h.Class('flex flex-col gap-10'), h.AriaLabel('Parameters')],
     [
       section(h, 'Specimen', [presetSelect(h, model)]),
+      plateSection(h, model),
       section(h, 'Grammar', [
         field(
           h,
@@ -300,9 +302,10 @@ const segmented = <A extends string>(
   options: ReadonlyArray<{ readonly value: A; readonly title: string }>,
   current: A,
   toMessage: (value: A) => Message,
+  rowClass = 'flex items-center gap-2.5',
 ): Html =>
   h.div(
-    [h.Class('flex items-center gap-2.5')],
+    [h.Class(rowClass)],
     [
       h.span([h.Class('caps'), h.AriaHidden(true)], [label]),
       h.div(
@@ -347,48 +350,50 @@ const STYLE_DESCRIPTIONS: Record<RenderStyle, string> = {
   Line: 'drawn in line',
 }
 
-const playbackBar = (h: H, model: Model): Html => {
+/** Play and the growth scrubber, under the sheet and as wide as it. */
+const transport = (h: H, model: Model): Html => {
   const { playback } = model
   const isDone = playback.progress >= 1
   const [label, glyph] = playback.isPlaying ? ['Pause', PAUSE] : isDone ? ['Replay', REPLAY] : ['Play', PLAY]
   return h.div(
-    [h.Class('flex flex-wrap items-center gap-x-6 gap-y-4')],
+    [h.Class('transport flex items-center gap-4')],
     [
-      h.div(
-        [h.Class('flex min-w-[16rem] flex-1 items-center gap-4')],
-        [
-          h.button(
-            [h.Type('button'), h.Class('btn btn-solid w-[6.5rem]'), h.OnClick(Message.ClickedTogglePlay())],
-            [icon(h, glyph), label],
-          ),
-          h.input([
-            h.Type('range'),
-            h.Min('0'),
-            h.Max('1'),
-            h.Step('0.001'),
-            h.Value(String(playback.progress)),
-            h.AriaLabel('Growth'),
-            h.AriaValuetext(`${Math.round(playback.progress * 100)}% grown`),
-            h.Class('range flex-1'),
-            h.OnInput(value => Message.ScrubbedProgress({ value: Number(value) })),
-          ]),
-        ],
+      h.button(
+        [h.Type('button'), h.Class('btn btn-solid w-[6.5rem] shrink-0'), h.OnClick(Message.ClickedTogglePlay())],
+        [icon(h, glyph), label],
       ),
-      h.div(
-        [h.Class('flex flex-wrap items-center gap-x-6 gap-y-3')],
-        [
-          segmented(h, 'Reveal', REVEAL_OPTIONS, playback.mode, mode => Message.SelectedMode({ mode })),
-          segmented(h, 'Style', STYLE_OPTIONS, model.renderStyle, renderStyle =>
-            Message.SelectedRenderStyle({ renderStyle }),
-          ),
-          ...(model.renderStyle === 'Leaf'
-            ? [segmented(h, 'Season', SEASON_OPTIONS, model.season, season => Message.SelectedSeason({ season }))]
-            : []),
-        ],
-      ),
+      h.input([
+        h.Type('range'),
+        h.Min('0'),
+        h.Max('1'),
+        h.Step('0.001'),
+        h.Value(String(playback.progress)),
+        h.AriaLabel('Growth'),
+        h.AriaValuetext(`${Math.round(playback.progress * 100)}% grown`),
+        h.Class('range min-w-0 flex-1'),
+        h.OnInput(value => Message.ScrubbedProgress({ value: Number(value) })),
+      ]),
     ],
   )
 }
+
+/** How the plate is revealed and painted: a label column and the choices,
+ *  aligned down the rail. */
+const PLATE_ROW = 'grid grid-cols-[4.75rem_auto] items-center justify-start'
+
+const plateSection = (h: H, model: Model): Html =>
+  section(h, 'Plate', [
+    h.div(
+      [h.Class('flex flex-col gap-3')],
+      [
+        segmented(h, 'Reveal', REVEAL_OPTIONS, model.playback.mode, mode => Message.SelectedMode({ mode }), PLATE_ROW),
+        segmented(h, 'Style', STYLE_OPTIONS, model.renderStyle, renderStyle => Message.SelectedRenderStyle({ renderStyle }), PLATE_ROW),
+        ...(model.renderStyle === 'Leaf'
+          ? [segmented(h, 'Season', SEASON_OPTIONS, model.season, season => Message.SelectedSeason({ season }), PLATE_ROW)]
+          : []),
+      ],
+    ),
+  ])
 
 const dot = (h: H): Html => h.span([h.Class('text-rule-strong'), h.AriaHidden(true)], ['·'])
 
@@ -439,14 +444,19 @@ const derivedString = (h: H, stats: BuildStats): Html =>
     ],
   )
 
-/** Pencilled titles in the sheet's lower margin, as on a print. */
-const inscriptions = (h: H, model: Model): ReadonlyArray<Html> => {
+/** Pencilled titles in the sheet's lower margin, as on a print: the
+ *  title always whole in the middle, the source and the numbers giving way
+ *  on a narrow sheet (see `.inscriptions` in styles.css). */
+const inscriptions = (h: H, model: Model): Html => {
   const [source, title, numbers] = inscriptionsOf(model)
-  return [
-    h.span([h.Class('inscription left-5 hidden sm:block'), h.AriaHidden(true)], [source]),
-    h.span([h.Class('inscription left-1/2 -translate-x-1/2'), h.AriaHidden(true)], [title]),
-    h.span([h.Class('inscription right-5'), h.AriaHidden(true)], [numbers]),
-  ]
+  return h.div(
+    [h.Class('inscriptions'), h.AriaHidden(true)],
+    [
+      h.span([h.Class('inscription inscription-source')], [source]),
+      h.span([h.Class('inscription')], [title]),
+      h.span([h.Class('inscription inscription-numbers')], [numbers]),
+    ],
+  )
 }
 
 // ZOOM
@@ -508,15 +518,25 @@ const zoomControls = (h: H, camera: Camera): Html => {
   )
 }
 
-const plate = (h: H, model: Model): Html => {
+/**
+ * The stage: the sheet, as tall as the window allows, turned to suit the
+ * plant (`model.orientation`), with the transport under it. styles.css
+ * sizes the sheet from the orientation so its plate mark has the print's
+ * proportions.
+ */
+const stage = (h: H, model: Model): Html => {
   const canvas = treeCanvas.withMessage(h)
   const shownBuildId = Option.match(model.shown, { onNone: () => -1, onSome: stats => stats.buildId })
   const title = findPreset(model.presetId)?.name ?? 'A plant from your own grammar'
   return h.figure(
-    [h.Class('flex min-w-0 flex-col gap-6')],
+    [
+      h.Class('stage'),
+      h.DataAttribute('orientation', model.orientation),
+      h.Style({ '--mark-ratio': String(MARK_RATIO[model.orientation]) }),
+    ],
     [
       h.div(
-        [h.Class('sheet aspect-[4/5] w-full sm:aspect-auto sm:h-[clamp(28rem,calc(100svh-19.5rem),54rem)]')],
+        [h.Class('sheet')],
         [
           canvas([
             canvas.BuildId(shownBuildId),
@@ -539,59 +559,60 @@ const plate = (h: H, model: Model): Html => {
           ]),
           h.div([h.Class('plate-mark'), h.AriaHidden(true)], []),
           zoomControls(h, model.camera),
-          ...inscriptions(h, model),
+          inscriptions(h, model),
         ],
       ),
-      playbackBar(h, model),
-      ...Option.match(model.shown, {
-        onNone: () => [],
-        onSome: stats => [
-          h.figcaption([h.Class('flex flex-col gap-5')], [statsLine(h, stats, model.params.iterations), derivedString(h, stats)]),
-        ],
-      }),
+      transport(h, model),
     ],
   )
 }
 
+/** What the build came to: its numbers and the start of its string. */
+const record = (h: H, model: Model): ReadonlyArray<Html> =>
+  Option.match(model.shown, {
+    onNone: () => [],
+    onSome: stats => [
+      section(h, 'Record', [statsLine(h, stats, model.params.iterations), derivedString(h, stats)]),
+    ],
+  })
+
+
+
 // PAGE
 
 const token = (h: H, text: string): Html =>
-  h.code([h.Class('font-mono text-[0.84em] not-italic text-ink')], [text])
+  h.code([h.Class('font-mono text-[0.84em] whitespace-nowrap not-italic text-ink')], [text])
 
 const masthead = (h: H): Html =>
   h.header(
-    [h.Class('flex flex-col gap-5 border-b border-rule pb-7 sm:pb-8')],
+    [h.Class('masthead flex flex-col gap-3')],
     [
       h.div(
-        [h.Class('flex items-baseline justify-between gap-6')],
+        [h.Class('flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1.5')],
         [
           h.p([h.Class('caps')], ['Algorithms that grow trees']),
           h.p([h.Class('caps hidden sm:block')], ['No. 1 · Lindenmayer systems']),
         ],
       ),
-      h.div(
-        [h.Class('flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between lg:gap-16')],
-        [
-          h.h1(
-            [h.Class('font-serif text-[42px] leading-[0.95] font-normal tracking-[-0.015em] sm:text-[54px]')],
-            ['Tree Garden'],
-          ),
-          h.p(
-            [h.Class('max-w-[34rem] font-serif text-[16.5px] leading-relaxed text-ink-2 lg:pb-1.5')],
-            [
-              'A grammar rewrites its axiom in parallel ',
-              h.em([], ['n']),
-              ' times; a turtle then reads the result as drawing commands: ',
-              token(h, 'F'),
-              ' draws, ',
-              token(h, '+ −'),
-              ' turn by δ, ',
-              token(h, '[ ]'),
-              ' start and end a branch.',
-            ],
-          ),
-        ],
-      ),
+      h.h1([h.Class('font-serif text-[40px] leading-[0.95] font-normal tracking-[-0.015em] sm:text-[46px]')], ['Tree Garden']),
+    ],
+  )
+
+/** What an L-system is, in a sentence: beside the title in the rail, or
+ *  under the plate on a narrow screen. */
+const lede = (h: H): Html =>
+  h.p(
+    [h.Class('lede max-w-[34rem] font-serif text-[15.5px] leading-relaxed text-ink-2')],
+    [
+      'A grammar rewrites its axiom in parallel ',
+      h.em([], ['n']),
+      ' times; a turtle then reads the result as drawing commands: ',
+      token(h, 'F'),
+      ' draws, ',
+      token(h, '+ −'),
+      ' turn by δ, ',
+      token(h, '[ ]'),
+      ' start and end a branch.',
     ],
   )
 
@@ -605,20 +626,23 @@ const colophon = (h: H): Html =>
     ],
   )
 
+/**
+ * The folio (styles.css): on a wide screen, the stage holds the left of
+ * the page at the window's height while the rail beside it (masthead,
+ * controls, record) scrolls; on a narrow one they stack, the sheet first.
+ */
 export const view = (model: Model, h: H): Document => ({
   title: 'Tree Garden · L-systems',
   body: h.div(
     [h.Class('min-h-screen bg-page font-sans text-ink')],
     [
       h.main(
-        [h.Class('mx-auto flex max-w-[86rem] flex-col gap-9 px-5 pt-7 pb-12 sm:gap-10 sm:px-10 sm:pt-10 lg:px-14')],
+        [h.Class('folio')],
         [
           masthead(h),
-          h.div(
-            [h.Class('grid gap-14 lg:grid-cols-[minmax(0,1fr)_19rem] lg:gap-16')],
-            [plate(h, model), controls(h, model)],
-          ),
-          colophon(h),
+          lede(h),
+          stage(h, model),
+          h.div([h.Class('rail flex flex-col gap-10')], [controls(h, model), ...record(h, model), colophon(h)]),
         ],
       ),
     ],

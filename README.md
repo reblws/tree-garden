@@ -57,8 +57,36 @@ a Model field, not part of the link):
 
 `render/plate.ts` is shared by the screen and the print: it places the
 plant (resting low, set across by the centre of its ink rather than its
-box, so a leaning crown keeps air on the side it reaches to), builds the
-Frame, and lays the layers together: paper, colour wash, ink, seal.
+box, so a leaning crown keeps air on the side it reaches to; a figure
+with no ground, such as Koch or Hilbert, sits at the optical centre),
+builds the Frame, and lays the layers together: paper, colour wash, ink,
+seal.
+
+**The sheet** (`render/sheet.ts`). Every plate is an A-series sheet,
+portrait, or landscape for a plant at least 1.1× wider than tall
+(`orientationOf`; of the presets, Koch's snowflake and the Conifer). The
+screen and the print share it: the on-screen sheet is sized (styles.css,
+from `MARK_RATIO`) so its plate mark has exactly the print's proportions,
+and `plateMargins` keeps the same room inside the mark on both, head
+room by the mark's height and side room by its width. What you see is
+what you print, short of the print's wider paper margins.
+
+The page is a folio (`ui/view.ts`, `.folio` in styles.css). On a wide
+screen the stage holds the left of the page: the sheet as tall as the
+window allows (never under 32rem, a shorter window scrolls; a landscape
+sheet at most 1100px wide), with Play and the growth scrubber under it,
+held in place while the rail beside it scrolls (masthead, specimen, plate
+style, grammar, growth, link, print, record). On a narrow screen they
+stack, the sheet straight after the title.
+
+The sheet turns only at quiet moments, never under the finger. The Model
+keeps `orientation` and `isEditing`: a slider drag or typing in a field
+leaves the sheet as it is; releasing the slider or leaving the field
+(`CommittedEdit`), a new plant, or a new seed lets it turn, once the
+build has landed and as long as the view is fitted. Zoomed in, the turn
+waits until the view goes back to Fit, so the camera never has to be
+carried across a change of shape. Playback never moves the plant: it is
+fitted to the finished build.
 
 **The ink brush** (`render/inkBrush.ts`). Chains wider than ~2 px are
 filled outlines with seeded, wobbling edges; thinner twigs are polylines
@@ -110,7 +138,9 @@ chain, so frames never flicker and marks never swim under the camera.
 
 **Print** (`render/print.ts`, Command `DownloadPrint`). A PNG at 300 dpi
 on A4, A3 or A2 (3508 × 4961 px for A3), portrait or landscape by the
-plant's shape, always ink on paper. It is the screen's renderer at a
+plant's shape (`orientationOf`, the same as the screen's sheet, taken
+from the plant so the same link always prints the same way, even while
+the screen's turn waits for a zoom to end), always ink on paper. It is the screen's renderer at a
 higher `dpr` (the sheet is ~1100 CSS px on its long side, so proportions
 match the screen) and a higher `detail` (fine bark and stamens show). It
 paints in bands of ~2.5 Mpx, yielding between them, then adds the plate
@@ -147,7 +177,9 @@ focused, `+` and `−` zoom by octaves, `0` fits and the arrow keys pan.
 - **State.** The camera (`render/camera.ts`) is three numbers in the Model:
   `zoom` and the plate point at the centre, in plate-normalised
   coordinates (0..1 across and down the fitted plate), so it survives
-  resizes and rebuilds. All the math is pure and unit-tested there
+  resizes and rebuilds. A sheet keeps its proportions at every window
+  size, so a resize only scales the view; the sheet changes shape only
+  at the fitted view (see The sheet, above). All the math is pure and unit-tested there
   (zoom about a point, pan, clamping, steps). A new plant (preset, Reseed)
   resets it; edits keep it, because the plant is refitted and the same
   camera still looks at about the same part of it. It is not in the link.
