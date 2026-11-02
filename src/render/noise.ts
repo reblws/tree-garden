@@ -34,6 +34,67 @@ export const noise1 = (seed: number, t: number): number => {
 export const fbm1 = (seed: number, t: number): number =>
   noise1(seed, t) * 0.7 + noise1(seed ^ 0x5bd1e995, t * 3.1) * 0.3
 
+/**
+ * `noise1(seed, t)` for a walk along `t`: it keeps the lattice cell it is
+ * in, so the many samples a stroke takes per cell hash nothing new. Same
+ * values, bit for bit, as `noise1`.
+ */
+export class NoiseCurve {
+  seed: number
+  #cell = Number.NaN
+  #a = 0
+  #b = 0
+
+  constructor(seed: number) {
+    this.seed = seed
+  }
+
+  /** Start over on another curve. */
+  reset(seed: number): this {
+    this.seed = seed
+    this.#cell = Number.NaN
+    return this
+  }
+
+  at(t: number): number {
+    const i = Math.floor(t)
+    if (i !== this.#cell) {
+      if (i === this.#cell + 1) {
+        this.#a = this.#b
+        this.#b = hash2(this.seed, i + 1)
+      } else {
+        this.#a = hash2(this.seed, i)
+        this.#b = hash2(this.seed, i + 1)
+      }
+      this.#cell = i
+    }
+    const f = t - i
+    const u = f * f * (3 - 2 * f)
+    const a = this.#a
+    return (a + (this.#b - a) * u) * 2 - 1
+  }
+}
+
+/** `fbm1(seed, t)` for a walk along `t`, like NoiseCurve. */
+export class FbmCurve {
+  readonly #broad = new NoiseCurve(0)
+  readonly #fine = new NoiseCurve(0)
+
+  constructor(seed: number) {
+    this.reset(seed)
+  }
+
+  reset(seed: number): this {
+    this.#broad.reset(seed)
+    this.#fine.reset(seed ^ 0x5bd1e995)
+    return this
+  }
+
+  at(t: number): number {
+    return this.#broad.at(t) * 0.7 + this.#fine.at(t * 3.1) * 0.3
+  }
+}
+
 /** A small seeded PRNG (mulberry32) for procedural textures that need a
  *  stream of numbers. Deterministic for a given seed. */
 export const prng = (seed: number): (() => number) => {
