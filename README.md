@@ -143,10 +143,43 @@ from the plant so the same link always prints the same way, even while
 the screen's turn waits for a zoom to end), always ink on paper. It is the screen's renderer at a
 higher `dpr` (the sheet is ~1100 CSS px on its long side, so proportions
 match the screen) and a higher `detail` (fine bark and stamens show). It
-paints in bands of ~2.5 Mpx, yielding between them, then adds the plate
-mark (a plate tone and a bevelled edge) and pencilled inscriptions with
-the seed; the file carries a pHYs chunk so it opens at 300 dpi. Same
-link, style, season and size give the same print.
+paints in bands of ~2.5 Mpx (`printBands`), then adds the plate mark (a
+plate tone and a bevelled edge) and pencilled inscriptions with the
+seed; the file carries a pHYs chunk so it opens at 300 dpi. Same link,
+style, season and size give the same print, byte for byte.
+
+- *Off the main thread.* The print is painted and encoded in a module
+  Web Worker on OffscreenCanvas (`render/print.worker.ts`, driven by
+  `render/printClient.ts`), so the page never stalls; the PNG comes back
+  as a Blob for the download. The request goes by value: a copy of the
+  geometry's typed arrays, transferred (a few ms for 350K segments;
+  rebuilding the plant in the worker would cost the generator's ~60 ms),
+  and the print's palette is the fixed ink-on-paper one, which reads no
+  CSS. Every painter gets its canvases from `makeCanvas`
+  (`render/canvas.ts`): an OffscreenCanvas in the worker, a `<canvas>` on
+  the page, so the screen paints exactly as before.
+- *One at a time.* One long-lived worker, started by the first print,
+  and prints queued, never overlapping: two prints at once compete for
+  canvas memory, and under that pressure Chrome can fall back from GPU to
+  software raster partway through, which changes the bytes.
+- *Every print the same.* Each print paints its own copy of the geometry,
+  so per-geometry caches start afresh: a first draw of a freshly computed
+  density wash differs by a level or two from a redraw of the cached
+  one, which used to make the second print of a plant differ from the
+  first.
+- *Progress.* The worker reports each band; `PaintedPrintBand` puts it in
+  the Model (`printProgress`) and the button counts it up.
+- *Fallback.* Without Worker or OffscreenCanvas, if the worker fails to
+  load, or if its contexts lack `filter` where the page's canvas has it
+  (Safari: OffscreenCanvas 2D since 16.4, `filter` only behind a flag),
+  the print is painted on the main thread as before, yielding between
+  bands, with the same bytes.
+- *Bands shape the bytes.* Each band is painted translated by its top
+  row, and float rounding of that translation reaches the anti-aliasing,
+  so a different band height gives a different file (on an A3, 6–7% of
+  the pixels, nearly all by one level of 255). Taller bands would mean
+  fewer walks of the tree, but they are kept as they are so a link keeps
+  printing the same file.
 
 Performance, headless Chrome at DPR 2 on a laptop: Twig n=11 (350K
 segments) plays at ~56 fps (draft frames) and its finished plate paints
@@ -154,8 +187,10 @@ in ~65 ms (Ink) / ~140–185 ms (Leaf); Weed n=8 (391K) plays at ~38 fps,
 finished in ~80 / ~125 ms; up to ~120K segments play at 60 fps. The crisp
 repaint after a gesture is ~70–150 ms on ordinary plants and up to
 ~300 ms at 5× deep inside the 350K crown (tens of thousands of twigs
-promoted to brush strokes). An A3 print takes about a second, with no
-frame longer than ~140 ms.
+promoted to brush strokes). An A3 print of Twig n=11 (Leaf) takes
+~1.2–1.6 s and A2 ~2–2.5 s, in the worker: no long task on the main
+thread and no frame longer than ~17 ms meanwhile (on the main thread it
+was 5–10 long tasks of up to ~240 ms).
 
 Rules of thumb:
 

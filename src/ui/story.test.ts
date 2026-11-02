@@ -26,6 +26,7 @@ const initialModel: Model = {
   isLinkCopied: false,
   printSize: 'A3',
   printStatus: 'Idle',
+  printProgress: 0,
 }
 
 const zoomed: Camera = { zoom: 4, x: 0.3, y: 0.6 }
@@ -264,6 +265,36 @@ describe('update', () => {
       ),
       Command.resolve(DownloadPrint, Message.CompletedPrint()),
       model(model => expect(model.printStatus).toBe('Idle')),
+    )
+  })
+
+  test('the print shows how far it has got, band by band, and starts again from nothing', () => {
+    story(
+      update,
+      given(modifyFields(initialModel, { shown: () => Option.some(stats(1)), printProgress: () => 0.9 })),
+      message(Message.ClickedDownloadPrint()),
+      model(model => expect(model).toMatchObject({ printStatus: 'Preparing', printProgress: 0 })),
+      Command.resolve(DownloadPrint, Message.CompletedPrint()),
+    )
+    // The bands arrive while the DownloadPrint Command is still running.
+    story(
+      update,
+      given(modifyFields(initialModel, { shown: () => Option.some(stats(1)), printStatus: () => 'Preparing' as const })),
+      message(Message.PaintedPrintBand({ done: 2, total: 8 })),
+      model(model => expect(model.printProgress).toBe(0.25)),
+      message(Message.PaintedPrintBand({ done: 7, total: 8 })),
+      model(model => expect(model.printProgress).toBe(0.875)),
+      Command.expectNone(),
+    )
+  })
+
+  test('a band reported after the print has finished changes nothing', () => {
+    story(
+      update,
+      given(modifyFields(initialModel, { shown: () => Option.some(stats(1)), printProgress: () => 0.5 })),
+      message(Message.PaintedPrintBand({ done: 8, total: 8 })),
+      model(model => expect(model).toMatchObject({ printStatus: 'Idle', printProgress: 0.5 })),
+      Command.expectNone(),
     )
   })
 

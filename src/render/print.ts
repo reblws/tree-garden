@@ -1,6 +1,7 @@
 import { Schema } from 'effect'
 
 import type { Segments2D } from '../core/geometry'
+import { encodePng, makeCanvas } from './canvas'
 import type { View } from './frame'
 import { printPalette } from './palette'
 import { paintPaper } from './paper'
@@ -20,12 +21,16 @@ import { type PlateOrientation, type Rect, plateMargins, printMark } from './she
  * proportions as on screen) and `detail` raised to match, so the finest
  * bark and the stamens appear as they would under the loupe. The sheet is
  * painted in horizontal bands, each a few million pixels with a margin
- * for the blurs, yielding to the browser between bands so the page stays
- * responsive; the bands are copied into one canvas and encoded.
+ * for the blurs; the bands are copied into one canvas and encoded. It
+ * runs in the print worker (see printClient.ts), or on the main thread,
+ * yielding between bands, where there is no worker.
  *
  * Everything is a function of the geometry, the style, the season and the
- * size: the same link, style and size always give the same print. It is
- * always ink on paper, whatever the page's theme.
+ * size: the same link, style and size always give the same print, byte for
+ * byte. The bands are part of that: each is painted translated by its top
+ * row, and the float rounding of that shift reaches the anti-aliasing, so
+ * other bands would give another file (6–7% of the pixels of an A3, nearly
+ * all by one level). It is always ink on paper, whatever the page's theme.
  */
 
 export const PrintSize = Schema.Literals(['A4', 'A3', 'A2'])
@@ -66,13 +71,56 @@ export interface PrintRequest {
 
 const nextTask = () => new Promise<void>(resolve => setTimeout(resolve, 0))
 
-/** Render the print and encode it as a PNG (with its resolution). */
-export const renderPrint = async (request: PrintRequest): Promise<Blob> => {
+/** One horizontal band of the sheet: the rows it delivers, `top` to
+ *  `bottom`, and the rows it paints, `from` to `to`, with room for the
+ *  blurs. */
+export interface Band {
+  readonly top: number
+  readonly bottom: number
+  readonly from: number
+  readonly to: number
+}
+
+/** The bands a `width` × `height` sheet is painted in: each at most
+ *  `BAND_PIXELS`, painted with `BAND_PAD` more above and below. */
+export const printBands = (width: number, height: number): ReadonlyArray<Band> => {
+  const bandHeight = Math.max(256, Math.min(height, Math.floor(BAND_PIXELS / width)))
+  const bands: Array<Band> = []
+  for (let top = 0; top < height; top += bandHeight) {
+    const bottom = Math.min(height, top + bandHeight)
+    bands.push({ top, bottom, from: Math.max(0, top - BAND_PAD), to: Math.min(height, bottom + BAND_PAD) })
+  }
+  return bands
+}
+
+/** The sheet's size in px, turned as asked. */
+export const sheetPixels = (size: PrintSize, orientation: PlateOrientation): { readonly width: number; readonly height: number } => {
+  const portrait = printPixels(size)
+  return orientation === 'Landscape' ? { width: portrait.height, height: portrait.width } : portrait
+}
+
+/** How far the print has got: `done` of `total` steps, a step per band and
+ *  a last one to finish and encode the sheet. */
+export type PrintProgress = (done: number, total: number) => void
+
+export interface PrintOptions {
+  readonly onProgress?: PrintProgress
+  /** Yield to the event loop between bands, so a page painting the print
+   *  on its main thread stays responsive. A worker has nothing to yield
+   *  to. Default true. */
+  readonly yieldBetweenBands?: boolean
+}
+
+/**
+ * Render the print and encode it as a PNG (with its resolution). Runs
+ * wherever there are canvases: in the print worker on OffscreenCanvas
+ * (print.worker.ts), or on the main thread when there is no worker (see
+ * printClient.ts), with the same bytes either way.
+ */
+export const renderPrint = async (request: PrintRequest, options: PrintOptions = {}): Promise<Blob> => {
   const { geometry, style, season } = request
-  const portrait = printPixels(request.size)
-  const isLandscape = request.orientation === 'Landscape'
-  const width = isLandscape ? portrait.height : portrait.width
-  const height = isLandscape ? portrait.width : portrait.height
+  const { onProgress, yieldBetweenBands = true } = options
+  const { width, height } = sheetPixels(request.size, request.orientation)
   const dpr = Math.max(width, height) / VIRTUAL_LONG_SIDE
   const palette = printPalette()
 
@@ -82,22 +130,19 @@ export const renderPrint = async (request: PrintRequest): Promise<Blob> => {
   const plate = printMark(width, height)
   const placement = placePlant(geometry, width, height, plateMargins(plate, width, height), short * 0.026)
 
-  const output = document.createElement('canvas')
-  output.width = width
-  output.height = height
+  const output = makeCanvas(width, height)
   const out = output.getContext('2d')
   if (out === null) throw new Error('No 2D context for the print')
 
-  const bandHeight = Math.max(256, Math.min(height, Math.floor(BAND_PIXELS / width)))
-  const paper = document.createElement('canvas')
-  const target = document.createElement('canvas')
-  const ink = document.createElement('canvas')
-  const wash = document.createElement('canvas')
+  const bands = printBands(width, height)
+  const total = bands.length + 1
+  const paper = makeCanvas(1, 1)
+  const target = makeCanvas(1, 1)
+  const ink = makeCanvas(1, 1)
+  const wash = makeCanvas(1, 1)
   let scratch: Float32Array = new Float32Array(0)
-  for (let top = 0; top < height; top += bandHeight) {
-    await nextTask()
-    const from = Math.max(0, top - BAND_PAD)
-    const to = Math.min(height, top + bandHeight + BAND_PAD)
+  for (const [index, { top, bottom, from, to }] of bands.entries()) {
+    if (yieldBetweenBands) await nextTask()
     const h = to - from
     for (const canvas of [paper, target, ink, wash]) {
       canvas.width = width
@@ -139,22 +184,24 @@ export const renderPrint = async (request: PrintRequest): Promise<Blob> => {
         context.clip()
       },
     })
-    out.drawImage(target, 0, top - from, width, Math.min(bandHeight, height - top), 0, top, width, Math.min(bandHeight, height - top))
+    out.drawImage(target, 0, top - from, width, bottom - top, 0, top, width, bottom - top)
+    onProgress?.(index + 1, total)
   }
   for (const canvas of [paper, target, ink, wash]) {
     canvas.width = 1
     canvas.height = 1
   }
 
-  await nextTask()
+  if (yieldBetweenBands) await nextTask()
   drawPlateMark(out, plate, dpr)
   drawInscriptions(out, plate, dpr, request.inscriptions, palette.inkRgb, [242, 239, 232])
 
-  const blob = await new Promise<Blob | null>(resolve => output.toBlob(resolve, 'image/png'))
+  const blob = await encodePng(output)
   output.width = 1
   output.height = 1
-  if (blob === null) throw new Error('The browser could not encode the print')
-  return withResolution(blob, DPI)
+  const tagged = await withResolution(blob, DPI)
+  onProgress?.(total, total)
+  return tagged
 }
 
 /**
@@ -218,11 +265,13 @@ const drawInscriptions = (
 }
 
 /** The PNG with a pHYs chunk after its header, so it opens at `dpi`. */
-const withResolution = async (blob: Blob, dpi: number): Promise<Blob> => {
-  const bytes = new Uint8Array(await blob.arrayBuffer())
-  // Signature (8) and IHDR (4 length + 4 type + 13 data + 4 CRC).
+export const withResolution = async (blob: Blob, dpi: number): Promise<Blob> => {
+  // Signature (8) and IHDR (4 length + 4 type + 13 data + 4 CRC). Only
+  // the header is read; the rest of the file is spliced in as a slice of
+  // the Blob, not copied.
   const at = 8 + 25
-  if (bytes.length < at || String.fromCharCode(...bytes.slice(12, 16)) !== 'IHDR') return blob
+  const head = new Uint8Array(await blob.slice(0, at).arrayBuffer())
+  if (head.length < at || String.fromCharCode(...head.slice(12, 16)) !== 'IHDR') return blob
   const perMetre = Math.round(dpi / 0.0254)
   const chunk = new Uint8Array(4 + 4 + 9 + 4)
   const view = new DataView(chunk.buffer)
@@ -232,12 +281,12 @@ const withResolution = async (blob: Blob, dpi: number): Promise<Blob> => {
   view.setUint32(12, perMetre)
   chunk[16] = 1 // metres
   view.setUint32(17, crc32(chunk.subarray(4, 17)))
-  return new Blob([bytes.subarray(0, at), chunk, bytes.subarray(at)], { type: 'image/png' })
+  return new Blob([head, chunk, blob.slice(at)], { type: 'image/png' })
 }
 
 let crcTable: Uint32Array | undefined
 
-const crc32 = (data: Uint8Array): number => {
+export const crc32 = (data: Uint8Array): number => {
   if (crcTable === undefined) {
     crcTable = new Uint32Array(256)
     for (let n = 0; n < 256; n++) {
@@ -249,18 +298,4 @@ const crc32 = (data: Uint8Array): number => {
   let crc = 0xffffffff
   for (let i = 0; i < data.length; i++) crc = (crcTable[(crc ^ (data[i] ?? 0)) & 0xff] ?? 0) ^ (crc >>> 8)
   return (crc ^ 0xffffffff) >>> 0
-}
-
-/** Render the print and hand it to the browser as a download. */
-export const downloadPrint = async (request: PrintRequest, fileName: string): Promise<void> => {
-  const blob = await renderPrint(request)
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = fileName
-  anchor.rel = 'noopener'
-  document.body.append(anchor)
-  anchor.click()
-  anchor.remove()
-  setTimeout(() => URL.revokeObjectURL(url), 60_000)
 }
