@@ -1,7 +1,10 @@
 import { litSide, shade } from '../core/shading'
+import { CollinearPen } from './collinearPen'
 import { paintDensityWash } from './densityWash'
 import { type Frame, clamp, isInView, textureMatrix } from './frame'
+import type { GpuInk } from './gpuInk'
 import { fbm1, hash2, noise1 } from './noise'
+import { TONE_CLASSES, WIDTH_CLASS, aerial, coolness, inkDensity, radiusFor, toneClassOf, widthLawOf, widthScaleOf } from './twigPlan'
 
 /**
  * Ink-brush painter (sumi-e). The tree is painted the way a person would
@@ -30,6 +33,10 @@ import { fbm1, hash2, noise1 } from './noise'
  *   and tone: one stroke call per class, so hundreds of thousands of twigs
  *   stay cheap. Where twigs crowd, they are thinned to a wash and laid over
  *   a soft density field (densityWash.ts), so dense crowns read as mist.
+ *   On screen the twigs are drawn on the GPU (gpuInk.ts), which makes the
+ *   same decisions from the same thresholds (twigPlan.ts); the Canvas2D
+ *   polylines remain for the print and when WebGL2 isn't there, with
+ *   straight runs merged into single lines (collinearPen.ts).
  *
  * All noise is a hash of the chain index and the distance along the chain
  * in plate units, so marks never flicker, swim or crawl under the camera.
@@ -57,10 +64,6 @@ const PROMOTE_BUDGET = 60_000
 /** Upper bound on the extra samples taken when zoomed in (see `upsample`).
  *  Past it strokes keep their plate-resolution outline. */
 const FINE_BUDGET = 400_000
-/** Width classes for the polyline strokes, in device pixels on screen. */
-const WIDTH_CLASS = 0.2
-/** Twig tone classes, by how far back the twig sits. */
-const TONE_CLASSES = 4
 
 /**
  * Bark fissures, coarse to fine. Sizes in CSS pixels of the fitted plate:
@@ -159,28 +162,16 @@ const smoothstep = (a: number, b: number, x: number) => {
   return t * t * (3 - 2 * t)
 }
 
-/** Ink density for a stroke `cssWidth` CSS px wide on the fitted plate:
- *  hairlines are a pale grey, limbs nearly full. Continuous, so a chain
- *  that turns from brush into polyline keeps its tone. */
-export const inkDensity = (cssWidth: number): number => 0.6 + 0.22 * widthScaleOf(cssWidth)
-
 /** The body of a brush stroke is a wash, lighter than a line of the same
  *  width: its bark, shading and rim (see `piece`) carry the darks, as the
  *  texture strokes (cun) do over a wash in a Chinese painting of a tree. */
 const bodyDensity = (cssWidth: number): number => 0.62 + 0.1 * widthScaleOf(cssWidth)
 
-/** 0 for a hairline (0.5 CSS px), 1 for a limb (13 CSS px and up), log scale. */
-const widthScaleOf = (cssWidth: number): number => clamp(Math.log2(Math.max(cssWidth, 0.5) / 0.5) / 4.7, 0, 1)
-
-/** Aerial perspective: further from the trunk and further back, lighter. */
-const aerial = (order: number, recession: number): number =>
-  (1 - 0.05 * Math.min(order, 5)) * (1 - 0.42 * recession)
-
-/** ... and cooler: the blue-grey of thinned ink. */
-const coolness = (order: number, recession: number): number =>
-  Math.min(0.8, recession * 0.75 + Math.min(order, 6) * 0.04)
-
-export const paintInk = (context: CanvasRenderingContext2D, frame: Frame): void => {
+/**
+ * Paint the ink of `frame`. With `gpu` (and WebGL2 up), the twigs are drawn
+ * on the GPU and laid in where their polylines would have been stroked.
+ */
+export const paintInk = (context: CanvasRenderingContext2D, frame: Frame, gpu?: GpuInk): void => {
   const { geometry, topology, radius, dpr, scale, offsetX, offsetY, visible, view, palette } = frame
   const { coords, parent } = geometry
   const { chainSegments, chainStart, chainCount, mainChild, chainOrder, chainRecession, chainParent } = topology
@@ -195,6 +186,16 @@ export const paintInk = (context: CanvasRenderingContext2D, frame: Frame): void 
   const promoteMin = frame.isDraft ? Number.POSITIVE_INFINITY : brushMin / zoom
   const step = SAMPLE_STEP * dpr
   const isZoomed = zoom > 1 + 1e-6
+  // The width tests as radius thresholds (w(r) >= w ⟺ r >= radiusFor(w)),
+  // which the GPU makes too, on the same float32 radii.
+  const law = widthLawOf(frame.width)
+  const brushRadius = radiusFor(law, brushMin)
+  const promoteRadius = isZoomed ? radiusFor(law, promoteMin) : Number.POSITIVE_INFINITY
+  const isGpu = gpu !== undefined && gpu.isAvailable()
+  // Chain positions (see twigPlan.packSegmentMeta) from which the brush and
+  // promotion budgets were spent: the GPU needs them to agree.
+  let coarseCut = Number.POSITIVE_INFINITY
+  let promoteCut = Number.POSITIVE_INFINITY
   // Room around a segment for the widest stroke there is, for culling.
   const cullPad = frame.width(topology.maxRadius) * 2 + 4 * dpr
 
@@ -237,16 +238,25 @@ export const paintInk = (context: CanvasRenderingContext2D, frame: Frame): void 
   /** Promoted twigs without marks, by tone (see `promote`). */
   const batched = new Map<number, Path2D>()
 
+  const pen = new CollinearPen()
+
   for (let c = 0; c < chainCount; c++) {
     const begin = chainStart[c] ?? 0
     const end = chainStart[c + 1] ?? 0
     const first = chainSegments[begin] ?? 0
     if (visible(first) <= 0) continue
+    // On the GPU, a chain that is all twig is drawn there entirely. (Its
+    // tone is never needed: a chain with a brush stroke or a promoted twig
+    // has a parent with one too, being at least as wide.)
+    if (isGpu) {
+      const r = radius[first] ?? 0
+      if ((r < brushRadius || budget.coarse <= 0) && (r < promoteRadius || budget.promote <= 0)) continue
+    }
     const order = chainOrder[c] ?? 0
     const recession = chainRecession[c] ?? 0
     const airy = aerial(order, recession)
     const chainCool = coolness(order, recession)
-    const toneClass = Math.min(TONE_CLASSES - 1, Math.round(recession * (TONE_CLASSES - 1)))
+    const toneClass = toneClassOf(recession)
     cool[c] = chainCool
     const up = chainParent[c] ?? -1
 
@@ -319,8 +329,8 @@ export const paintInk = (context: CanvasRenderingContext2D, frame: Frame): void 
       const segment = chainSegments[k] ?? 0
       const v = visible(segment)
       if (v <= 0) break
+      if ((radius[segment] ?? 0) < brushRadius || budget.coarse <= 0) break
       const w0 = frame.width(radius[segment] ?? 0)
-      if (w0 < brushMin || budget.coarse <= 0) break
       const next = mainChild[segment] ?? -1
       const isLast = v < 1 || next < 0 || visible(next) <= 0
       const w1 = isLast ? w0 * (v < 1 ? 0.25 : 0.45) : frame.width(radius[next] ?? 0)
@@ -336,7 +346,10 @@ export const paintInk = (context: CanvasRenderingContext2D, frame: Frame): void 
       if (w0 > maxWidth) maxWidth = w0
       // Only what will be drawn counts against the budget: zoomed in, most
       // of the tree is walked (so its texture stays put) but culled.
-      if (!isZoomed || isInView(view, x0, y0, x1, y1, w0 * 2 + 4 * dpr)) budget.coarse -= n - before
+      if (!isZoomed || isInView(view, x0, y0, x1, y1, w0 * 2 + 4 * dpr)) {
+        budget.coarse -= n - before
+        if (budget.coarse <= 0 && coarseCut === Number.POSITIVE_INFINITY) coarseCut = k + 1
+      }
       if (isLast) {
         k++
         break
@@ -367,7 +380,9 @@ export const paintInk = (context: CanvasRenderingContext2D, frame: Frame): void 
 
     // 2. The rest of the chain: polylines grouped by width class, or, when
     //    zoomed in far enough, brush strokes of their own. The distance
-    //    along the chain is kept so their texture stays put.
+    //    along the chain is kept so their texture stays put. On the GPU
+    //    only the promoted twigs are walked: once the chain is too thin to
+    //    promote (it only narrows), the rest is the GPU's.
     let lastClass = -1
     let arc = length
     let runWidth = 0
@@ -379,6 +394,8 @@ export const paintInk = (context: CanvasRenderingContext2D, frame: Frame): void 
       const segment = chainSegments[k] ?? 0
       const v = visible(segment)
       if (v <= 0) break
+      const r = radius[segment] ?? 0
+      if (isGpu && (r < promoteRadius || budget.promote <= 0)) break
       const fraction = v < 1 ? v : 1
       const o = segment * 4
       const ax = coords[o] ?? 0
@@ -394,12 +411,13 @@ export const paintInk = (context: CanvasRenderingContext2D, frame: Frame): void 
           runWidth = 0
         }
         arc += Math.hypot(x1 - x0, y1 - y0)
+        if (lastClass !== -1) pen.end()
         lastClass = -1
         if (v < 1) break
         continue
       }
-      const w0 = frame.width(radius[segment] ?? 0)
-      if (isZoomed && w0 >= promoteMin && budget.promote > 0 && isInView(view, x0, y0, x1, y1, w0 * 2 + 4 * dpr)) {
+      const w0 = frame.width(r)
+      if (r >= promoteRadius && budget.promote > 0 && isInView(view, x0, y0, x1, y1, w0 * 2 + 4 * dpr)) {
         const next = mainChild[segment] ?? -1
         const isLast = v < 1 || next < 0 || visible(next) <= 0
         const w1 = isLast ? w0 * (v < 1 ? 0.25 : 0.45) : frame.width(radius[next] ?? 0)
@@ -410,8 +428,10 @@ export const paintInk = (context: CanvasRenderingContext2D, frame: Frame): void 
         const before = n
         n = appendSamples(n, x0, y0, x1, y1, w0, w1, arc, step)
         budget.promote -= n - before
+        if (budget.promote <= 0 && promoteCut === Number.POSITIVE_INFINITY) promoteCut = k + 1
         arc = ss[n - 1] ?? arc
         if (w0 > runWidth) runWidth = w0
+        if (lastClass !== -1) pen.end()
         lastClass = -1
         if (isLast) n = promote(n, runWidth, arc - runStart, runIsStart)
         if (v < 1) break
@@ -425,26 +445,57 @@ export const paintInk = (context: CanvasRenderingContext2D, frame: Frame): void 
       if (isZoomed) {
         arc += Math.hypot(x1 - x0, y1 - y0)
         if (!isInView(view, x0, y0, x1, y1, w)) {
+          if (lastClass !== -1) pen.end()
           lastClass = -1
           if (v < 1) break
           continue
         }
       }
+      if (isGpu) {
+        // A twig on screen that isn't promoted: the GPU draws it.
+        if (v < 1) break
+        continue
+      }
       const widthClass = Math.max(1, Math.round((w * zoom) / (WIDTH_CLASS * dpr)))
       const path = (twigs[widthClass] ??= new Path2D())
       if (widthClass !== lastClass) {
-        path.moveTo(x0, y0)
+        pen.moveTo(path, x0, y0)
         lastClass = widthClass
       }
-      path.lineTo(x1, y1)
+      pen.lineTo(x0, y0, x1, y1)
       if (v < 1) break
     }
+    pen.end()
     if (n > 0) promote(n, runWidth, arc - runStart, runIsStart)
   }
 
   // Twigs first, light and fine; the brush strokes go on top. Where
   // thousands of twigs crowd each square inch they are laid in as a wash of
   // diluted ink rather than a solid black mass.
+  if (isGpu) {
+    const image = gpu.twigs(
+      frame,
+      {
+        law,
+        brushRadius,
+        promoteRadius,
+        coarseCut,
+        promoteCut,
+        maxTwigWidth: twigCeiling(frame, brushMin, promoteMin, isZoomed, coarseCut, promoteCut),
+        dilution,
+      },
+      context.canvas.width,
+      context.canvas.height,
+    )
+    if (image !== undefined) {
+      context.save()
+      context.setTransform(1, 0, 0, 1, 0, 0)
+      context.globalAlpha = 1
+      context.globalCompositeOperation = 'source-over'
+      context.drawImage(image, 0, 0)
+      context.restore()
+    }
+  }
   for (let t = 0; t < TONE_CLASSES; t++) {
     const recession = t / (TONE_CLASSES - 1)
     const twigs = thin[t] as Array<Path2D | undefined>
@@ -546,6 +597,15 @@ export const paintInk = (context: CanvasRenderingContext2D, frame: Frame): void 
     context.globalCompositeOperation = 'source-over'
   }
   context.globalAlpha = 1
+}
+
+/** The widest twig that can be on screen, plate px: narrower than a brush
+ *  stroke and, zoomed in, than a promoted twig, unless a budget ran out. */
+const twigCeiling = (frame: Frame, brushMin: number, promoteMin: number, isZoomed: boolean, coarseCut: number, promoteCut: number): number => {
+  const widest = frame.width(frame.topology.maxRadius)
+  if (Number.isFinite(coarseCut)) return widest
+  if (isZoomed && Number.isFinite(promoteMin) && !Number.isFinite(promoteCut)) return Math.min(widest, brushMin, promoteMin)
+  return Math.min(widest, brushMin)
 }
 
 /** Append samples for a straight piece from (x0, y0) to (x1, y1) to the

@@ -21,6 +21,7 @@ import {
   zoomAbout,
 } from './camera'
 import type { Frame } from './frame'
+import { type GpuInk, createGpuInk } from './gpuInk'
 import { type Palette, readPalette } from './palette'
 import { paintPaper } from './paper'
 import { type Placement, buildFrame, composePlate, placePlant } from './plate'
@@ -128,6 +129,10 @@ class TreeCanvasElement extends HTMLElement {
   #finalBase = ''
   #finalCamera: Camera = fitCamera
   #radius: Float32Array = new Float32Array(0)
+  /** The GPU twig painter: undefined until first needed, null without
+   *  WebGL2 (or when switched off). */
+  #gpu: GpuInk | null | undefined
+  #gpuEnabled = true
   #palette: Palette | undefined
   #inset: Inset | undefined
   #frame = 0
@@ -222,6 +227,36 @@ class TreeCanvasElement extends HTMLElement {
     return this.#shown
   }
 
+  /** Draw the twigs on the GPU when WebGL2 is there (on by default; off
+   *  draws them on the canvas, as the print does). For comparisons from the
+   *  console. */
+  set gpuEnabled(value: boolean) {
+    if (value === this.#gpuEnabled) return
+    this.#gpuEnabled = value
+    this.#invalidate()
+  }
+  get gpuEnabled(): boolean {
+    return this.#gpuEnabled
+  }
+  /** Whether the last paint could use the GPU. */
+  get gpuActive(): boolean {
+    return this.#gpuEnabled && this.#gpu != null && this.#gpu.isAvailable()
+  }
+
+  /** Forget every cached picture and paint again (the GPU came or went). */
+  #invalidate() {
+    this.#fitFinalKey = ''
+    this.#finalKey = ''
+    this.#finalBase = ''
+    this.#schedule()
+  }
+
+  #gpuInk(): GpuInk | undefined {
+    if (!this.#gpuEnabled) return undefined
+    if (this.#gpu === undefined) this.#gpu = createGpuInk(() => this.#invalidate()) ?? null
+    return this.#gpu ?? undefined
+  }
+
   connectedCallback() {
     this.#canvas.style.display = 'block'
     this.#canvas.style.width = '100%'
@@ -256,6 +291,8 @@ class TreeCanvasElement extends HTMLElement {
     this.removeEventListener('gesturestart', this.#onGestureStart)
     this.removeEventListener('gesturechange', this.#onGestureChange)
     this.removeEventListener('gestureend', this.#onGestureEnd)
+    this.#gpu?.dispose()
+    this.#gpu = undefined
     cancelAnimationFrame(this.#frame)
     cancelAnimationFrame(this.#moveFrame)
     clearTimeout(this.#crispTimer)
@@ -622,6 +659,7 @@ class TreeCanvasElement extends HTMLElement {
       placement,
       drawPaper: context => drawPaper(context, paper),
       clip: context => this.#clipToPlate(context, target.width, target.height),
+      gpu: this.#gpuInk(),
     })
   }
 

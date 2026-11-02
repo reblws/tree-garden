@@ -3,6 +3,7 @@ import type { Segments2D } from '../core/geometry'
 import type { Rect } from './camera'
 import { hasFoliage, paintFoliage } from './foliage'
 import { type Frame, type View, applyView, widthScale } from './frame'
+import type { GpuInk } from './gpuInk'
 import { paintGround } from './ground'
 import { paintInk } from './inkBrush'
 import { paintLines } from './linePen'
@@ -227,6 +228,9 @@ export interface Composition {
   readonly drawPaper: (context: CanvasRenderingContext2D) => void
   /** Clip `context` (identity transform) to where the painting may go. */
   readonly clip: (context: CanvasRenderingContext2D) => void
+  /** Draw the twigs (and the Line style's pens) on the GPU; the screen
+   *  only. Without it they are drawn on the canvas (the print). */
+  readonly gpu?: GpuInk | undefined
 }
 
 /** Paint the wash and ink layers for `frame` and lay them, with the seal,
@@ -243,9 +247,9 @@ export const composePlate = (target: HTMLCanvasElement, layers: Layers, frame: F
   ink.clearRect(0, 0, layers.ink.width, layers.ink.height)
   applyView(ink, view)
   if (isLine) {
-    paintLines(ink, frame)
+    paintLines(ink, frame, composition.gpu)
   } else {
-    paintInk(ink, frame)
+    paintInk(ink, frame, composition.gpu)
     // The ground goes on after the tree, so the trunk stands in it rather
     // than on it.
     if (isBranched) paintGround(ink, frame, placement)
