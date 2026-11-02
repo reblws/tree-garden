@@ -514,7 +514,7 @@ export const beginInk = (context: CanvasRenderingContext2D, frame: Frame, gpu?: 
     return next >= chainCount
   }
 
-  const finish = (): void => {
+  const finish = (): boolean => {
     context.lineCap = 'round'
     context.lineJoin = 'round'
 
@@ -536,14 +536,16 @@ export const beginInk = (context: CanvasRenderingContext2D, frame: Frame, gpu?: 
         context.canvas.width,
         context.canvas.height,
       )
-      if (image !== undefined) {
-        context.save()
-        context.setTransform(1, 0, 0, 1, 0, 0)
-        context.globalAlpha = 1
-        context.globalCompositeOperation = 'source-over'
-        context.drawImage(image, 0, 0)
-        context.restore()
-      }
+      // The GPU failed (its context lost, an allocation refused): the twig
+      // chains were never walked here, so stop; the caller paints the ink
+      // again on the canvas alone.
+      if (image === undefined) return false
+      context.save()
+      context.setTransform(1, 0, 0, 1, 0, 0)
+      context.globalAlpha = 1
+      context.globalCompositeOperation = 'source-over'
+      context.drawImage(image, 0, 0)
+      context.restore()
     }
     for (let t = 0; t < TONE_CLASSES; t++) {
       const recession = t / (TONE_CLASSES - 1)
@@ -646,6 +648,7 @@ export const beginInk = (context: CanvasRenderingContext2D, frame: Frame, gpu?: 
       context.globalCompositeOperation = 'source-over'
     }
     context.globalAlpha = 1
+    return true
   }
 
   return { step: walk, finish }
@@ -654,14 +657,29 @@ export const beginInk = (context: CanvasRenderingContext2D, frame: Frame, gpu?: 
 /** A paint of the ink spread over tasks: see `beginInk`. */
 export interface InkJob {
   readonly step: (deadline: number) => boolean
-  readonly finish: () => void
+  /** Lay it all down. False if the GPU failed on the way: the layer is
+   *  then incomplete, and should be painted again without it. */
+  readonly finish: () => boolean
 }
 
 /** Paint the ink of `frame` at once. */
 export const paintInk = (context: CanvasRenderingContext2D, frame: Frame, gpu?: GpuInk): void => {
   const job = beginInk(context, frame, gpu)
   job.step(Number.POSITIVE_INFINITY)
-  job.finish()
+  if (job.finish()) return
+  // The GPU failed: again, on the canvas alone.
+  clearLayer(context)
+  const again = beginInk(context, frame)
+  again.step(Number.POSITIVE_INFINITY)
+  again.finish()
+}
+
+/** Clear the layer `context` paints on, keeping the view on it. */
+export const clearLayer = (context: CanvasRenderingContext2D): void => {
+  context.save()
+  context.setTransform(1, 0, 0, 1, 0, 0)
+  context.clearRect(0, 0, context.canvas.width, context.canvas.height)
+  context.restore()
 }
 
 /** The widest twig that can be on screen, plate px: narrower than a brush

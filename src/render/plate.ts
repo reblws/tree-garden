@@ -6,7 +6,7 @@ import { hasFoliage, paintFoliage } from './foliage'
 import { type Frame, type View, applyView, isInView, strokeWidthOf, widthScale } from './frame'
 import type { GpuInk } from './gpuInk'
 import { paintGround } from './ground'
-import { beginInk } from './inkBrush'
+import { beginInk, clearLayer } from './inkBrush'
 import { paintLines } from './linePen'
 import type { Palette } from './palette'
 import type { RenderStyle } from './renderStyle'
@@ -265,7 +265,7 @@ export const beginPlate = (target: HTMLCanvasElement, layers: Layers, frame: Fra
     ink.setTransform(1, 0, 0, 1, 0, 0)
     return { step: () => (finishPlate(ink, out, layers, frame, composition, isBranched), true) }
   }
-  const job = beginInk(ink, frame, composition.gpu)
+  let job = beginInk(ink, frame, composition.gpu)
   let isWalked = false
   let isSealReady = false
   let isInked = false
@@ -284,7 +284,14 @@ export const beginPlate = (target: HTMLCanvasElement, layers: Layers, frame: Fra
       }
       if (!isInked) {
         applyView(ink, view)
-        job.finish()
+        if (!job.finish()) {
+          // The GPU failed on the way: paint the ink again, on the canvas
+          // alone, so the plate is never left without its twigs.
+          clearLayer(ink)
+          job = beginInk(ink, frame)
+          isWalked = false
+          return false
+        }
         // The ground goes on after the tree, so the trunk stands in it
         // rather than on it.
         if (isBranched) paintGround(ink, frame, placement)

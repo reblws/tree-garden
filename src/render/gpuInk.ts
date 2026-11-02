@@ -366,9 +366,19 @@ export const createGpuInk = (onChange: () => void): GpuInk | undefined => {
     stencil: false,
     preserveDrawingBuffer: false,
     powerPreference: 'high-performance',
+    // Not on a software rasteriser (SwiftShader, a blocklisted GPU): there
+    // a few hundred thousand capsules can take seconds, long enough for the
+    // GPU watchdog to reset every canvas on the page. Canvas2D is faster.
+    failIfMajorPerformanceCaveat: true,
   }
   let gl = canvas.getContext('webgl2', attributes)
   if (gl === null) return undefined
+  // An explicitly chosen software renderer (or Chrome's own fallback after
+  // GPU crashes) passes the caveat test: refuse it by name.
+  if (isSoftwareRenderer(gl)) {
+    gl.getExtension('WEBGL_lose_context')?.loseContext()
+    return undefined
+  }
 
   let isLost = false
   let targets = 0
@@ -479,8 +489,18 @@ export const createGpuInk = (onChange: () => void): GpuInk | undefined => {
       textures.push(texture)
     }
     context.drawBuffers(Array.from({ length: targets }, (_, j) => context.COLOR_ATTACHMENT0 + j))
+    const status = context.checkFramebufferStatus(context.FRAMEBUFFER)
     context.bindFramebuffer(context.FRAMEBUFFER, null)
+    if (status !== context.FRAMEBUFFER_COMPLETE) throw new Error(`coverage targets incomplete (${status})`)
+    checkErrors(context, 'coverage targets')
     size = { width, height }
+  }
+
+  /** GL reports a failed allocation (out of memory) as an error, not an
+   *  exception: look after each one (rare), so it falls back to Canvas2D. */
+  const checkErrors = (context: WebGL2RenderingContext, what: string) => {
+    const error = context.getError()
+    if (error !== context.NO_ERROR && !context.isContextLost()) throw new Error(`${what}: GL error ${error}`)
   }
 
   const buffersFor = (context: WebGL2RenderingContext, frame: Frame): GeometryBuffers => {
@@ -552,6 +572,7 @@ export const createGpuInk = (onChange: () => void): GpuInk | undefined => {
     context.texParameteri(context.TEXTURE_2D, context.TEXTURE_MIN_FILTER, context.NEAREST)
     context.texParameteri(context.TEXTURE_2D, context.TEXTURE_MAG_FILTER, context.NEAREST)
     current = { geometry, topology, prepVao, drawVao, prepared, buffers: [seg, arrival, previous, meta, next, nextArrival, dirs, prepared, staging], radius, rows, radiusSource: undefined, staging }
+    checkErrors(context, 'geometry buffers')
     return current
   }
 
@@ -759,6 +780,16 @@ export const createGpuInk = (onChange: () => void): GpuInk | undefined => {
 }
 
 const finite = (x: number): number => (Number.isFinite(x) ? x : 3.0e38)
+
+/** Names of software rasterisers, on which Canvas2D beats this painter. */
+export const SOFTWARE_RENDERER = /swiftshader|llvmpipe|softpipe|software|basic render|mesa offscreen/i
+
+const isSoftwareRenderer = (context: WebGL2RenderingContext): boolean => {
+  const names = [String(context.getParameter(context.RENDERER) ?? '')]
+  const info = context.getExtension('WEBGL_debug_renderer_info')
+  if (info !== null) names.push(String(context.getParameter(info.UNMASKED_RENDERER_WEBGL) ?? ''))
+  return names.some(name => SOFTWARE_RENDERER.test(name))
+}
 
 const padded = (colors: Float32Array, first: number, perPass: number): Float32Array => {
   const out = new Float32Array(perPass * 4)

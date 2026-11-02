@@ -135,6 +135,7 @@ class TreeCanvasElement extends HTMLElement {
    *  WebGL2 (or when switched off). */
   #gpu: GpuInk | null | undefined
   #gpuEnabled = true
+  #watchesLayers = false
   #palette: Palette | undefined
   #inset: Inset | undefined
   #frame = 0
@@ -268,6 +269,16 @@ class TreeCanvasElement extends HTMLElement {
     this.#canvas.style.width = '100%'
     this.#canvas.style.height = '100%'
     if (!this.#canvas.isConnected) this.append(this.#canvas)
+    if (!this.#watchesLayers) {
+      // A GPU reset (a driver hiccup, memory pressure, the watchdog) wipes
+      // every accelerated canvas, and Chrome hands them back blank: paint
+      // everything again, the paper too, rather than show a bare sheet.
+      for (const canvas of [this.#canvas, this.#ink, this.#wash, this.#paper, this.#fitPaper, this.#fitFinal, this.#final]) {
+        canvas.addEventListener('contextlost', this.#onLayerLost)
+        canvas.addEventListener('contextrestored', this.#onLayerLost)
+      }
+      this.#watchesLayers = true
+    }
     this.#resizeObserver ??= new ResizeObserver(() => this.#resize())
     this.#resizeObserver.observe(this)
     this.#colorScheme ??= matchMedia('(prefers-color-scheme: dark)')
@@ -306,6 +317,13 @@ class TreeCanvasElement extends HTMLElement {
     clearTimeout(this.#wheelTimer)
     this.#frame = 0
     this.#moveFrame = 0
+  }
+
+  #onLayerLost = () => {
+    this.#cancelJob()
+    this.#paperKey = ''
+    this.#fitPaperKey = ''
+    this.#invalidate()
   }
 
   #onColorScheme = () => {
