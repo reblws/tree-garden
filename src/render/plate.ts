@@ -1,9 +1,9 @@
-import { type BranchTopology, PIPE_EXPONENT, pipeRadii } from '../core/branching'
+import { type BranchTopology, PIPE_EXPONENT, growRadii, pipeRadii } from '../core/branching'
 import type { Segments2D } from '../core/geometry'
 import { GeometryStore } from '../engine/geometryStore'
 import type { Rect } from './camera'
 import { hasFoliage, paintFoliage } from './foliage'
-import { type Frame, type View, applyView, widthScale } from './frame'
+import { type Frame, type View, applyView, strokeWidthOf, widthScale } from './frame'
 import { paintGround } from './ground'
 import { paintInk } from './inkBrush'
 import { paintLines } from './linePen'
@@ -169,7 +169,7 @@ export const buildFrame = (request: FrameRequest): { readonly frame: Frame; read
 
   // Widths come from the fitted plate, so zooming magnifies them.
   const widths = widthScale(topology.maxRadius, scale, dpr, request.minDimension)
-  const strokeWidth = widths.isUnbranched ? () => widths.tip : (r: number) => widths.tip * r ** widths.exponent
+  const strokeWidth = strokeWidthOf(widths)
 
   const { arrival, count } = geometry
   const isGrow = request.mode === 'Grow'
@@ -183,7 +183,7 @@ export const buildFrame = (request: FrameRequest): { readonly frame: Frame; read
   if (progress < 1) {
     if (scratch.length < count) scratch = new Float32Array(count)
     radius = scratch
-    if (isGrow) pipeRadii(geometry, PIPE_EXPONENT, radius, count, i => (arrival[i] ?? 0) < threshold)
+    if (isGrow) growRadii(geometry, topology, PIPE_EXPONENT, radius, threshold)
     else pipeRadii(geometry, PIPE_EXPONENT, radius, Math.ceil(threshold))
   }
 
