@@ -54,6 +54,8 @@ export const Message = defineMessageUnion({
   // The print.
   SelectedPrintSize: { size: PrintSize },
   ClickedDownloadPrint: {},
+  /** The print worker finished another band of the sheet. */
+  PaintedPrintBand: { done: Schema.Number, total: Schema.Number },
   CompletedPrint: {},
   FailedPrint: { reason: Schema.String },
 

@@ -48,6 +48,7 @@ export const init: Runtime.RoutingApplicationInit<Model, Message> = (url: Url) =
       isLinkCopied: false,
       printSize: 'A3',
       printStatus: 'Idle',
+      printProgress: 0,
     },
     commands: [Generate({ buildId, params })],
   }

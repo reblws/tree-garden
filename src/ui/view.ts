@@ -279,7 +279,7 @@ const printSection = (h: H, model: Model): Html => {
           h.AriaBusy(isPreparing),
           h.OnClick(Message.ClickedDownloadPrint()),
         ],
-        [isPreparing ? 'Painting the print…' : `Download the print · ${model.printSize}`],
+        [isPreparing ? `Painting the print… ${Math.round(model.printProgress * 100)}%` : `Download the print · ${model.printSize}`],
       ),
       model.printStatus === 'Failed'
         ? h.p(

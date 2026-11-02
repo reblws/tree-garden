@@ -5,11 +5,13 @@ import { load, pushUrl, replaceUrl } from 'foldkit/navigation'
 import { GeometryStore } from '../engine/geometryStore'
 import { generateLSystem } from '../engine/lsystem'
 import { LSystemParams } from '../params/lsystem'
-import { PrintSize, downloadPrint } from '../render/print'
+import { PrintSize } from '../render/print'
+import { paintPrint, saveBlob } from '../render/printClient'
 import { RenderStyle } from '../render/renderStyle'
 import { Season } from '../render/season'
 import { PlateOrientation, aspectOf } from '../render/sheet'
 import { Message } from './message'
+import { reportPrintBand } from './printProgress'
 
 /** Grow the plant for `params`, put the geometry in the store under
  *  `buildId`, and report the stats back to update. */
@@ -78,8 +80,9 @@ export const CopyLink = Command.define('CopyLink', {
 /**
  * Paint the plate of build `buildId` as a print on a sheet of `size` at
  * 300 dpi, off screen, and hand it to the browser as a download named
- * `fileName`. Takes a second or several; the painting yields between
- * bands, so the page stays responsive meanwhile.
+ * `fileName`. Takes a second or several, in the print worker
+ * (render/printClient.ts), so the page never stalls; each band painted is
+ * reported through printProgress.ts as a PaintedPrintBand Message.
  */
 export const DownloadPrint = Command.define('DownloadPrint', {
   args: {
@@ -97,7 +100,10 @@ export const DownloadPrint = Command.define('DownloadPrint', {
       try: async () => {
         const geometry = GeometryStore.get(buildId)
         if (geometry === undefined) throw new Error('The plant is no longer in memory')
-        await downloadPrint({ geometry, style, season, size, orientation, inscriptions }, fileName)
+        const blob = await paintPrint({ geometry, style, season, size, orientation, inscriptions }, (done, total) =>
+          reportPrintBand({ done, total }),
+        )
+        saveBlob(blob, fileName)
       },
       catch: error => (error instanceof Error ? error.message : String(error)),
     }).pipe(

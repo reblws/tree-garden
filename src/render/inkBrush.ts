@@ -1,4 +1,5 @@
 import { litSide, shade } from '../core/shading'
+import { makeCanvas } from './canvas'
 import { paintDensityWash } from './densityWash'
 import { type Frame, clamp, isInView, textureMatrix } from './frame'
 import { fbm1, hash2, noise1 } from './noise'
@@ -593,9 +594,7 @@ let tooth: HTMLCanvasElement | undefined
  *  peaks of the paper, ink is lifted in grains rather than clean lines. */
 export const toothTile = (): HTMLCanvasElement => {
   if (tooth !== undefined) return tooth
-  tooth = document.createElement('canvas')
-  tooth.width = TOOTH_TILE
-  tooth.height = TOOTH_TILE
+  tooth = makeCanvas(TOOTH_TILE, TOOTH_TILE)
   const context = tooth.getContext('2d')
   if (context === null) return tooth
   const image = context.createImageData(TOOTH_TILE, TOOTH_TILE)

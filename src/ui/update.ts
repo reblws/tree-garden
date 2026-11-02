@@ -212,7 +212,7 @@ export const update = (model: Model, message: Message) =>
           model.printStatus === 'Preparing'
             ? { model }
             : {
-                model: modifyFields(model, { printStatus: () => 'Preparing' as const }),
+                model: modifyFields(model, { printStatus: () => 'Preparing' as const, printProgress: () => 0 }),
                 commands: [
                   DownloadPrint({
                     buildId: stats.buildId,
@@ -229,6 +229,12 @@ export const update = (model: Model, message: Message) =>
                 ],
               },
       }),
+    // Bands only count while the print they belong to is painting; one
+    // that arrives after it has finished is late news.
+    PaintedPrintBand: ({ done, total }) =>
+      model.printStatus === 'Preparing' && total > 0
+        ? { model: modifyFields(model, { printProgress: () => Math.min(1, Math.max(0, done / total)) }) }
+        : { model },
     CompletedPrint: () => ({ model: modifyFields(model, { printStatus: () => 'Idle' as const }) }),
     FailedPrint: () => ({ model: modifyFields(model, { printStatus: () => 'Failed' as const }) }),
 

@@ -33,4 +33,6 @@ const skipBranding = (plugins: PluginOption): Array<Plugin> =>
 
 export default defineConfig({
   plugins: [tailwindcss(), skipBranding(foldkit())],
+  // The print worker (render/print.worker.ts) is an ES module worker.
+  worker: { format: 'es' },
 })

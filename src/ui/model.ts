@@ -74,5 +74,7 @@ export const Model = Schema.Struct({
    *  plant, so not part of the link. */
   printSize: PrintSize,
   printStatus: PrintStatus,
+  /** How much of the print is painted, 0..1, while it is Preparing. */
+  printProgress: Schema.Number,
 })
 export type Model = typeof Model.Type

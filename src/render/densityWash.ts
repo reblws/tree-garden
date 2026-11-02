@@ -1,4 +1,5 @@
 import type { Segments2D } from '../core/geometry'
+import { makeCanvas } from './canvas'
 import { type Frame, clamp } from './frame'
 import { hash2 } from './noise'
 
@@ -75,9 +76,7 @@ export const paintDensityWash = (context: CanvasRenderingContext2D, frame: Frame
 
   // Coverage → alpha, saturating softly, broken by a slow cloudiness so it
   // reads as mist rather than a blur.
-  const canvas = document.createElement('canvas')
-  canvas.width = gw
-  canvas.height = gh
+  const canvas = makeCanvas(gw, gh)
   const target = canvas.getContext('2d')
   if (target === null) return
   const image = target.createImageData(gw, gh)

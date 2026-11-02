@@ -1,5 +1,6 @@
 import type { CameraView } from './camera'
 import { textureScale } from './camera'
+import { makeCanvas } from './canvas'
 import { hash2, prng } from './noise'
 import type { Palette } from './palette'
 
@@ -36,9 +37,7 @@ const grainTile = (palette: Palette): HTMLCanvasElement => {
   const key = palette.key
   const cached = grainTiles.get(key)
   if (cached !== undefined) return cached
-  const tile = document.createElement('canvas')
-  tile.width = GRAIN_TILE
-  tile.height = GRAIN_TILE
+  const tile = makeCanvas(GRAIN_TILE, GRAIN_TILE)
   const context = tile.getContext('2d')
   if (context === null) return tile
   const image = context.createImageData(GRAIN_TILE, GRAIN_TILE)
@@ -83,9 +82,7 @@ const reliefTile = (palette: Palette): HTMLCanvasElement => {
   const cached = reliefTiles.get(palette.key)
   if (cached !== undefined) return cached
   const n = RELIEF_TILE
-  const tile = document.createElement('canvas')
-  tile.width = n
-  tile.height = n
+  const tile = makeCanvas(n, n)
   const context = tile.getContext('2d')
   if (context === null) return tile
   const height = new Float32Array(n * n)
@@ -265,9 +262,7 @@ const cloudsFor = (width: number, height: number, cell: number, palette: Palette
   const ch = Math.ceil(height / cell) + 2
   const key = `${cw}x${ch}|${palette.key}`
   if (clouds?.key === key) return clouds.canvas
-  const canvas = document.createElement('canvas')
-  canvas.width = cw
-  canvas.height = ch
+  const canvas = makeCanvas(cw, ch)
   const context = canvas.getContext('2d')
   if (context !== null) {
     const image = context.createImageData(cw, ch)
