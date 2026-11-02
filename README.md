@@ -7,7 +7,7 @@ Interactive showcase of algorithms that grow literal trees. It starts with a
 ```sh
 pnpm install
 pnpm dev           # http://localhost:5173
-pnpm test          # vitest: core, URL codec, Foldkit story tests
+pnpm test          # vitest: core, determinism vs reference, worker, URL codec, Foldkit story tests
 pnpm typecheck
 pnpm build
 ```
@@ -27,7 +27,9 @@ src/
     branching.ts   pipe-model radii and stroke chains from the parent links
     lsystem/       grammar parsing + parallel rewriting, turtle interpretation
   params/        Effect Schema per algorithm: Model type, URL codec, slider ranges; presets
-  engine/        Effect at the edges: seeded Random, geometry store keyed by build id
+  engine/        Effect at the edges: seeded Random, the generator's Web Worker,
+                 geometry store (and topology cache) keyed by build id
+  test/          determinism tests against a frozen reference copy of the old core
   render/        <tree-canvas> custom element: imperative Canvas2D renderer
   ui/            Foldkit app: model, messages, update, commands, subscriptions, view
 ```
@@ -40,7 +42,10 @@ derives, in pure and unit-tested loops:
 
 - **Pipe-model radii** (Leonardo's rule): `r_parent^e = Σ r_child^e`, tips = 1,
   `e = 2.3`. During playback only the visible part counts, so the trunk
-  thickens as the crown appears.
+  thickens as the crown appears. In the Grow reveal that is two flat
+  passes per frame: the segments are in depth-first preorder, so each
+  subtree is an index range (`subtreeEnd`), and a segment's weight is the
+  number of visible tips in its range, a difference of prefix sums.
 - **Stroke chains**: from every fork the stroke continues into the heaviest
   child; the other children start chains of their own. A chain is painted
   as one tapering brush stroke.
@@ -163,9 +168,54 @@ Rules of thumb:
   build id and playback state; the geometry lives in `engine/geometryStore.ts`
   and the canvas element looks it up by id.
 - **Hot loops are plain TypeScript.** Effect provides a seeded `Random` service;
-  the core calls `nextDoubleUnsafe()` from an ordinary loop.
+  the core calls `nextDoubleUnsafe()` from an ordinary loop. Hot loops live
+  in small functions without closures (V8 compiles those well), and every
+  optimisation must be bit-identical: `src/test/determinism.test.ts` checks
+  the generator and topology byte for byte against a frozen copy of the
+  straightforward code (`src/test/reference/`).
+- **Generation never blocks the page.** See below.
 - **Same link, same plant.** The params, including the seed, are encoded in
   the query string.
+
+## Generation off the main thread
+
+`generateLSystem` (engine/lsystem.ts) runs the whole build in a Web Worker
+(`engine/lsystem.worker.ts`): parse, rewrite, turtle, and the branch
+topology (radii, chains, subtree ranges) that the first paint needs.
+
+- **Started at load.** `entry.ts` starts the worker before the app boots,
+  and the worker warms its JIT on two small plants, so its start-up is
+  hidden and the first real build runs optimised code.
+- **Nothing copied.** The typed arrays come back as transferables, and the
+  topology goes into the GeometryStore's cache with the geometry, so the
+  first paint doesn't compute it again.
+- **Same link, same plant, on any thread.** The worker seeds Effect's
+  `Random` with `Random.withSeed(seed)` exactly as the main thread did.
+- **The newest build wins.** A new request supersedes the one in flight:
+  its Effect fails with `Superseded` at once (the Command reports
+  `SupersededGenerate`, a no-op), and the worker drops the old build at
+  its next stage boundary (after each rewriting iteration, every ~256K
+  symbols of the turtle's walk, before the topology, before posting),
+  returning to its event loop through a MessageChannel to hear about it.
+  Measured, this beats terminating and respawning the worker: a fresh
+  worker costs ~15–25 ms to start and its first big build runs ~1.5×
+  slower on a cold JIT. While a slider is dragged over a huge plant, the
+  plant updates when the drag pauses for about one build's time.
+- **Fallback.** Without `Worker` (vitest, happy-dom) or if it fails to
+  load, the same build runs inline.
+- **The generator itself** (core/lsystem/compiled.ts) never builds the
+  derived string: symbols become byte ids, a deterministic grammar is
+  walked depth first straight from its productions (symbol counts come
+  from per-symbol count vectors), and a stochastic one is rewritten over
+  byte buffers, drawing in the same order as before.
+
+"Grown in" is the work itself, wherever it ran: generation plus topology;
+its tooltip splits the two.
+
+Measured (headless Chrome, DPR 2, production build, Twig n=11 and Weed
+n=8): the main thread no longer runs any long task before the first paint
+(~210 ms before), a rebuild's only long task is the paint itself, and a
+Line rebuild of the weed has no long task at all (65 ms before).
 
 ## Zoom and pan
 

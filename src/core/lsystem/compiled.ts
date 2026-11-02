@@ -13,7 +13,8 @@ import type { Production } from './grammar'
  * byte buffers, drawing from `random` in exactly the order `expand` does,
  * and the turtle then walks the buffer.
  *
- * Every hot loop is its own small function (see branching.ts).
+ * Every hot loop sits in its own function, apart from the set-up code, and
+ * the turtle keeps its state in locals within a slice of its walk.
  */
 
 /** What the turtle does with a symbol. */
