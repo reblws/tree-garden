@@ -1,8 +1,8 @@
 # Rendering: what we learned
 
-The README says *what* the renderer does. This file records *why* it is the
-way it is: what worked, what was tried and dropped, the measured numbers,
-and the traps. It is distilled from six agent rounds (two design rounds,
+The README gives the overview and [ARCHITECTURE.md](ARCHITECTURE.md) the
+moving parts. This file records *why* the renderer is the way it is: what
+worked, what was tried and dropped, the measured numbers, and the traps. It is distilled from six agent rounds (two design rounds,
 zoom, layout, three performance tracks) between 2026‑10‑31 and 2026‑11‑02.
 Read it before changing anything in `src/render/` or `src/core/branching.ts`.
 
@@ -125,8 +125,11 @@ construction, not drawing.
   loops; always confirm in the browser.
 - **SIMD / threads:** the turtle is a serial dependency chain, and threads
   need COOP/COEP headers, which GitHub Pages can't send.
-- **Splitting hot loops into many small functions:** V8 sometimes ran them
-  up to 2× slower. Big first calls get OSR-compiled and then deoptimise;
+- **Splitting one hot loop into a chain of small functions:** in the
+  topology passes, V8 sometimes ran the split version up to 2× slower, so
+  those passes stay in one function. (Keeping a hot loop *out* of a large
+  function, and free of closures, still helps; what hurt was cutting one
+  loop into pieces.) Big first calls get OSR-compiled and then deoptimise;
   warm up on small inputs instead.
 
 ### Budgets
@@ -206,8 +209,15 @@ ink), so the class structure must be reproduced exactly, not approximated.
 - **Benchmarks:** interleaved A/B in one browser process, median and p95,
   canvas pools, the 1-px flush, one Chrome at a time with its own CDP port,
   and an emulated colour scheme (headless follows the macOS appearance).
-- **The dev server is not production.** Right after a source file changes,
-  a fresh tab on the Vite dev server can load two copies of a module, so
-  `GeometryStore` is written in one and read from the other, and the plate
-  stays blank (with `gpuActive` false). Production is unaffected. Before
-  chasing a rendering bug, reproduce it on `pnpm build && pnpm preview`.
+- **The dev server is not production.** Foldkit's Vite plugin keeps the
+  Model across reloads, even for a freshly opened tab. A restored Model
+  points at a build id whose geometry was never grown in that page,
+  because geometry lives outside the Model. Without a guard, the plate
+  stays blank (with `gpuActive` false), and it looked like a GPU
+  presentation bug for two fix rounds. The `missingGeometry` subscription
+  (`ui/subscription.ts`) now spots this and sends `MissedGeometry`, which
+  regrows the same plant. A deterministic repro is to touch a file in
+  `src/` and then load the page. A guess that the module was being loaded
+  twice was wrong: the store was a single instance, just empty. Before
+  chasing a rendering bug, reproduce it on `pnpm build && pnpm preview`,
+  and then find out what state the page actually has.

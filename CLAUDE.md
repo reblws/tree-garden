@@ -9,7 +9,8 @@ Read before you change things:
 - `docs/RENDERING.md`: invariants, what made the look work, performance
   findings and pitfalls. Required before touching `src/render/` or
   `src/core/branching.ts`.
-- `docs/RETRO.md`: process lessons and the ranked improvement backlog.
+- `docs/ARCHITECTURE.md`: the sheet and layout, print export, generation in
+  the worker, zoom and pan.
 
 ## Rules
 - **Model:** geometry never goes in the Foldkit Model; it holds a build id.
@@ -28,8 +29,9 @@ Read before you change things:
 
 ## Verifying rendering
 - **Use production:** reproduce on `pnpm build && pnpm preview`, not the dev
-  server. Right after a source edit, the dev server can show a blank plate,
-  which is a dev-only module duplication.
+  server. In dev, Foldkit restores the Model across reloads. Geometry lives
+  outside the Model, so the `missingGeometry` subscription regrows it; keep
+  that guard if you add state that lives outside the Model.
 - **Screenshots:** take them without any `getImageData` first; a readback
   forces the canvas to present and hides bugs.
 - **Colour scheme:** emulate it (`Emulation.setEmulatedMedia`), because
