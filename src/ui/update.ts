@@ -140,6 +140,13 @@ export const update = (model: Model, message: Message) =>
     // Only ever an older build than the latest: nothing to do.
     SupersededGenerate: () => ({ model }),
 
+    // Same params, same seed: the same plant, byte for byte. Nothing else
+    // about the view changes (no replay, no URL write, the sheet stays).
+    MissedGeometry: ({ buildId }) =>
+      Option.exists(model.shown, stats => stats.buildId === buildId) && model.latestBuildId === buildId
+        ? rebuild(model, model.params, { presetId: model.presetId, replay: false, commit: false, isEdit: false })
+        : { model },
+
     ClickedTogglePlay: () => ({
       model: modifyFields(model, {
         playback: playback =>

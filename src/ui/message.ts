@@ -31,6 +31,10 @@ export const Message = defineMessageUnion({
   FailedGenerate: { buildId: Schema.Number, errors: Schema.Array(ParseError) },
   /** A newer build was requested before this one finished: it was dropped. */
   SupersededGenerate: { buildId: Schema.Number },
+  /** The plate shows a build whose geometry this page never made: the Model
+   *  was restored (Foldkit's dev reload keeps it across page loads) but the
+   *  geometry lives outside the Model. Grow it again. */
+  MissedGeometry: { buildId: Schema.Number },
 
   // Playback.
   ClickedTogglePlay: {},

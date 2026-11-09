@@ -442,4 +442,36 @@ describe('update', () => {
       Command.resolve(DownloadPrint, Message.CompletedPrint()),
     )
   })
+
+  test('a restored Model whose build this page never grew grows it again, keeping the view', () => {
+    const restored = modifyFields(initialModel, {
+      latestBuildId: () => 7,
+      shown: () => Option.some(stats(7)),
+      playback: () => ({ mode: 'Grow', progress: 1, isPlaying: false }),
+    })
+    story(
+      update,
+      given(restored),
+      message(Message.MissedGeometry({ buildId: 7 })),
+      model(model => {
+        expect(model.latestBuildId).toBe(8)
+        expect(model.params).toEqual(restored.params)
+        expect(model.playback).toEqual(restored.playback)
+        expect(Option.getOrThrow(model.shown).buildId).toBe(7)
+      }),
+      Command.expectExact(Generate),
+      Command.resolve(Generate, Message.CompletedGenerate({ stats: stats(8) })),
+      model(model => expect(Option.getOrThrow(model.shown).buildId).toBe(8)),
+    )
+  })
+
+  test('a missing-geometry report for an outdated build is ignored', () => {
+    story(
+      update,
+      given(modifyFields(initialModel, { latestBuildId: () => 9, shown: () => Option.some(stats(7)) })),
+      message(Message.MissedGeometry({ buildId: 7 })),
+      model(model => expect(model.latestBuildId).toBe(9)),
+      Command.expectNone(),
+    )
+  })
 })
