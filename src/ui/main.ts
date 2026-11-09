@@ -11,6 +11,7 @@ import { Model } from './model'
 import { subscriptions } from './subscription'
 import { update } from './update'
 import { view } from './view'
+import { readTheme } from './theme'
 
 const DEFAULT_SEED = 'oak'
 
@@ -34,14 +35,17 @@ export const init: Runtime.RoutingApplicationInit<Model, Message> = (url: Url) =
   const buildId = 1
   return {
     model: {
+      theme: readTheme(),
+      isMenuOpen: false,
       params,
       presetId: matchingPresetId(params),
       latestBuildId: buildId,
       shown: Option.none(),
       errors: [],
       playback: { mode: 'Grow', progress: 0, isPlaying: true },
-      renderStyle: 'Leaf',
+      renderStyle: 'Ink',
       season: 'Summer',
+      isSeasonAutomatic: true,
       camera: fitCamera,
       orientation: 'Portrait',
       isEditing: false,

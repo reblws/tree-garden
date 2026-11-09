@@ -7,6 +7,7 @@ import { RenderStyle } from '../render/renderStyle'
 import { RevealMode } from '../render/revealMode'
 import { Season } from '../render/season'
 import { PlateOrientation } from '../render/sheet'
+import { Theme } from './theme'
 
 export const ParseError = Schema.Struct({ line: Schema.Number, message: Schema.String })
 export type ParseError = typeof ParseError.Type
@@ -44,6 +45,8 @@ export const PrintStatus = Schema.Literals(['Idle', 'Preparing', 'Failed'])
 export type PrintStatus = typeof PrintStatus.Type
 
 export const Model = Schema.Struct({
+  theme: Theme,
+  isMenuOpen: Schema.Boolean,
   params: LSystemParams,
   /** The preset the params came from, or '' once the user edits them. */
   presetId: Schema.String,
@@ -60,6 +63,8 @@ export const Model = Schema.Struct({
   /** The leaves' palette in the Leaf style. A viewing choice, so not part
    *  of the link. */
   season: Season,
+  /** Auto derives foliage from the seed; selecting a season overrides it. */
+  isSeasonAutomatic: Schema.Boolean,
   /** Zoom and centre of the view on the plate (render/camera.ts). Three
    *  numbers, plate-relative, so they survive resizes and rebuilds. A
    *  viewing choice, so not part of the link. */

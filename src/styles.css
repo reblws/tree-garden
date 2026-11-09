@@ -1,563 +1,196 @@
 @import 'tailwindcss';
 
-/*
- * Ink on paper. Strictly monochrome: one ink, one paper, and greys mixed
- * between them. The light theme is a print on warm off-white stock; the
- * dark theme inverts it to pale ink on charcoal. The plate's canvas reads
- * --plate-* back, so the painting always matches the page.
- */
+@font-face {
+  font-family: 'Instrument Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./assets/fonts/instrument-sans-regular.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Instrument Sans';
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./assets/fonts/instrument-sans-italic.ttf') format('truetype');
+}
 
 :root {
-  color-scheme: light;
-  --page: #f6f5f1;
-  --ink: #161513;
-  --ink-2: #4b4944;
-  --ink-3: #807c74;
-  --rule: #dedad1;
-  --rule-strong: #b8b3a8;
-  --field: #fbfaf7;
-  --plate-paper: #f2efe8;
-  --plate-ink: #141311;
-  --plate-highlight: #fdfcf9;
-  --plate-mark: rgb(22 21 19 / 0.32);
-  --sheet-shadow: 0 1px 1px rgb(22 21 19 / 0.05), 0 22px 40px -28px rgb(22 21 19 / 0.45);
-  /* The plate mark's inset. <tree-canvas> reads these too: it clips the
-     painting to the mark, so keep them plain px values. */
+  color-scheme: dark;
+  --page: #000000;
+  --ink: #f4f3ef;
+  --muted: rgb(244 243 239 / 0.6);
+  --rule: rgb(244 243 239 / 0.26);
+  --plate-paper: #000000;
+  --plate-ink: #f4f3ef;
+  --plate-highlight: #242423;
+  --plate-mark: var(--rule);
+  /* Plain px values are also read by the canvas clipping code. */
   --plate-mark-top: 14px;
   --plate-mark-side: 14px;
   --plate-mark-bottom: 38px;
-  /* The gap in the mark's top edge that holds the zoom cartouche: its
-     distance from the mark's right corner, its width, and how far the
-     cartouche reaches below the line (the canvas keeps ink out of it). */
   --plate-gap-right: 16px;
   --plate-gap-width: 150px;
   --plate-gap-depth: 12px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --page: #0e0e0d;
-    --ink: #ecebe6;
-    --ink-2: #b4b1aa;
-    --ink-3: #85827b;
-    --rule: #2a2927;
-    --rule-strong: #47453f;
-    --field: #141413;
-    --plate-paper: #161615;
-    --plate-ink: #ebe8e1;
-    --plate-highlight: #2a2927;
-    --plate-mark: rgb(236 235 230 / 0.2);
-    --sheet-shadow: 0 0 0 1px rgb(236 235 230 / 0.06), 0 26px 50px -30px rgb(0 0 0 / 0.9);
-  }
+:root[data-theme='light'] {
+  color-scheme: light;
+  --page: #f4f3ef;
+  --ink: #171715;
+  --muted: rgb(23 23 21 / 0.65);
+  --rule: rgb(23 23 21 / 0.26);
+  --plate-paper: #f4f3ef;
+  --plate-ink: #171715;
+  --plate-highlight: #fffefa;
 }
 
 @theme {
-  --font-serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', 'URW Palladio L', Georgia, serif;
-  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
-  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  --font-sans: 'Instrument Sans', system-ui, sans-serif;
+  --font-mono: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
 }
 
-@theme inline {
-  --color-page: var(--page);
-  --color-ink: var(--ink);
-  --color-ink-2: var(--ink-2);
-  --color-ink-3: var(--ink-3);
-  --color-rule: var(--rule);
-  --color-rule-strong: var(--rule-strong);
-  --color-field: var(--field);
-  --color-plate: var(--plate-paper);
-}
+html { background: var(--page); color: var(--ink); -webkit-font-smoothing: antialiased; }
+body { margin: 0; font-family: var(--font-sans); font-size: 15px; line-height: 1.45; font-feature-settings: 'lnum', 'tnum'; }
+* { box-sizing: border-box; }
+::selection { background: var(--ink); color: var(--page); }
+button, input, textarea, select { font: inherit; color: inherit; border-radius: 0; }
+button { cursor: pointer; background: transparent; }
+button:disabled { color: var(--muted); cursor: default; }
+:where(button, select, input, textarea, summary, a, tree-canvas):focus-visible { outline: 1px solid var(--ink); outline-offset: -4px; }
 
-html {
+.garden {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-rows: 48px minmax(0, 1fr) 48px;
+  grid-template-areas: 'top top' 'stage rail' 'transport actions';
+  height: 100svh;
+  min-height: 640px;
+  border: 1px solid var(--rule);
+  background: var(--page);
+}
+.topbar { grid-area: top; display: flex; align-items: center; gap: 24px; padding-left: 16px; border-bottom: 1px solid var(--rule); min-width: 0; }
+.topbar h1 { flex: 1; font-size: 15px; font-weight: 400; letter-spacing: 0.01em; white-space: nowrap; }
+.build-stats { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.theme-toggle { display: flex; align-items: center; justify-content: center; align-self: stretch; width: 48px; padding: 0; border: 0; border-left: 1px solid var(--rule); font-size: 13px; }
+.theme-toggle:hover { background: var(--ink); color: var(--page); }
+.theme-symbol { font-size: 17px; line-height: 1; }
+.menu-toggle { display: none !important; }
+.about { position: relative; font-size: 13px; color: var(--muted); }
+.about summary { cursor: pointer; list-style: none; padding: 14px 0; }
+.about summary::-webkit-details-marker { display: none; }
+.about summary:hover, .about[open] summary { color: var(--ink); }
+.about-panel { position: absolute; top: calc(100% + 1px); right: 0; width: min(360px, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--rule); background: var(--page); color: var(--ink); z-index: 5; }
+.about-panel p + p { margin-top: 14px; color: var(--muted); }
+
+.rail { grid-area: rail; min-width: 0; overflow: auto; align-self: stretch; }
+.control-row { position: relative; display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; align-items: center; min-height: 48px; border-bottom: 1px solid var(--rule); }
+.control-label { padding-left: 16px; color: var(--muted); font-size: 13px; }
+.control-symbol { cursor: help; }
+.control-tooltip {
+  display: none;
+  position: absolute;
+  top: calc(100% - 4px);
+  left: 8px;
+  right: 8px;
+  z-index: 4;
+  padding: 12px;
+  border: 1px solid var(--rule);
   background: var(--page);
   color: var(--ink);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  text-rendering: optimizeLegibility;
+  font-size: 13px;
+  line-height: 1.5;
+  pointer-events: none;
 }
+.control-symbol:hover + .control-tooltip { display: block; }
+.control-value { min-width: 0; padding-right: 16px; }
+.control-readout { padding-right: 16px; min-width: 56px; text-align: right; font-family: var(--font-mono); font-size: 12px; }
+.field { display: block; width: 100%; border: 0; background: transparent; font-family: var(--font-mono); font-size: 12.5px; padding: 12px 0; }
+.field:focus-visible { outline-offset: 2px; }
+.preset-row { min-height: 48px; padding: 0 16px; border-bottom: 1px solid var(--rule); }
+select.field { appearance: none; font: inherit; cursor: pointer; padding-right: 16px; background-image: linear-gradient(45deg, transparent 50%, var(--ink) 50%), linear-gradient(135deg, var(--ink) 50%, transparent 50%); background-size: 4px 4px; background-position: calc(100% - 4px) 50%, 100% 50%; background-repeat: no-repeat; }
+select option { background: var(--page); color: var(--ink); }
+.grammar { padding: 14px 16px; border-bottom: 1px solid var(--rule); }
+textarea.field { resize: vertical; min-height: 84px; line-height: 1.7; padding: 0; }
+textarea[aria-invalid='true'] { text-decoration: underline wavy; text-underline-offset: 4px; }
+.grammar-errors { font-size: 12px; white-space: pre-line; color: var(--muted); }
+.grammar-errors:empty { display: none; }
+.grammar-errors:not(:empty) { margin-top: 10px; }
+.icon-button { display: inline-grid; place-items: center; flex: none; width: 32px; height: 32px; border: 0; }
+.icon-button:hover { color: var(--muted); }
+.reseed { margin-right: 12px; }
+.style-options { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--rule); }
+.season-options { grid-template-columns: repeat(4, 1fr); }
+.style-options button { height: 48px; border: 0; border-right: 1px solid var(--rule); font-size: 13px; color: var(--muted); }
+.style-options button:last-child { border-right: 0; }
+.style-options button:hover { color: var(--ink); }
+.style-options button[aria-pressed='true'] { background: var(--ink); color: var(--page); }
 
-::selection {
-  background: var(--ink);
-  color: var(--page);
+.range { appearance: none; -webkit-appearance: none; width: 100%; min-width: 0; height: 24px; margin: 0; background: transparent; cursor: pointer; }
+.range::-webkit-slider-runnable-track { height: 1px; background: var(--rule); }
+.range::-moz-range-track { height: 1px; background: var(--rule); }
+.range::-webkit-slider-thumb { -webkit-appearance: none; width: 9px; height: 9px; margin-top: -4px; background: var(--ink); border: 0; border-radius: 0; }
+.range::-moz-range-thumb { width: 9px; height: 9px; background: var(--ink); border: 0; border-radius: 0; }
+.range:focus-visible { outline-offset: 2px; }
+.transport { grid-area: transport; display: flex; align-items: center; gap: 16px; min-width: 0; padding: 0 16px; border-top: 1px solid var(--rule); border-right: 1px solid var(--rule); }
+.growth-range { flex: 1; }
+.reveal-options { display: flex; gap: 16px; }
+.reveal-options button { height: 40px; border: 0; font-size: 13px; color: var(--muted); }
+.reveal-options button:hover { color: var(--ink); }
+.reveal-options button[aria-pressed='true'] { color: var(--ink); text-decoration: underline; text-underline-offset: 5px; text-decoration-thickness: 1px; }
+.growth-readout { width: 4ch; text-align: right; font: 12px var(--font-mono); color: var(--muted); }
+.actions { grid-area: actions; position: relative; display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--rule); }
+.actions > button { border: 0; min-height: 47px; font-size: 13px; }
+.actions > button + button { border-left: 1px solid var(--rule); }
+.actions > button:hover:not(:disabled) { background: var(--ink); color: var(--page); }
+.print-error { position: absolute; bottom: 100%; left: 0; right: 0; padding: 16px; border-top: 1px solid var(--rule); background: var(--page); font-size: 13px; }
+.build-notice { position: fixed; bottom: 60px; left: 16px; max-width: min(440px, calc(100vw - 32px)); padding: 12px 16px; border: 1px solid var(--rule); background: var(--page); font-size: 13px; z-index: 3; }
+
+/* The mark keeps the same proportions and margins as the exported plate. */
+.stage { grid-area: stage; container: stage / size; display: grid; place-items: center; min-width: 0; min-height: 0; padding: 20px; margin: 0; overflow: hidden; border-right: 1px solid var(--rule); }
+.sheet {
+  --mark-x: calc(2 * var(--plate-mark-side));
+  --mark-y: calc(var(--plate-mark-top) + var(--plate-mark-bottom));
+  --sheet-h: min(100cqh, (100cqw - var(--mark-x)) * var(--mark-ratio) + var(--mark-y));
+  position: relative;
+  container: sheet / inline-size;
+  width: calc((var(--sheet-h) - var(--mark-y)) / var(--mark-ratio) + var(--mark-x));
+  height: var(--sheet-h);
+  border: 1px solid var(--rule);
+  background: var(--plate-paper);
 }
-
-/* Focus is always a ring of ink, offset from the control. */
-:where(button, select, input, textarea, summary, a):focus-visible {
-  outline: 1.5px solid var(--ink);
-  outline-offset: 3px;
+.plate-canvas { position: absolute; inset: 0; }
+tree-canvas { display: block; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; touch-action: pan-y; }
+.plate-mark {
+  position: absolute; inset: var(--plate-mark-top) var(--plate-mark-side) var(--plate-mark-bottom); border: 1px solid var(--plate-mark); pointer-events: none;
+  --top-left: calc(100% - var(--plate-gap-right) - var(--plate-gap-width));
+  mask: linear-gradient(#000 0 0) left top / var(--top-left) 2px no-repeat, linear-gradient(#000 0 0) right top / var(--plate-gap-right) 2px no-repeat, linear-gradient(#000 0 0) left bottom / 100% calc(100% - 2px) no-repeat;
 }
+.zoom { position: absolute; top: calc(var(--plate-mark-top) - 10.5px); right: calc(var(--plate-mark-side) + var(--plate-gap-right) + 8px); height: 22px; display: flex; align-items: center; gap: 1px; color: var(--muted); }
+.zoom-button { position: relative; display: inline-grid; place-items: center; height: 22px; min-width: 22px; padding: 0 4px; border: 0; font-size: 10px; }
+.zoom-button:hover:not(:disabled) { color: var(--ink); }
+.zoom-button:disabled { opacity: 0.38; }
+.zoom-readout { min-width: 3.4em; text-align: center; font-size: 12px; font-variant-numeric: tabular-nums; }
+.zoom-rule { width: 1px; height: 11px; margin: 0 5px; background: var(--rule); }
+.inscriptions { position: absolute; left: 14px; right: 14px; bottom: 10px; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 16px; pointer-events: none; }
+.inscription { font-size: 12px; font-style: italic; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.inscription-numbers { text-align: right; }
+@container sheet (max-width: 26rem) { .inscription-source { visibility: hidden; } }
+@media (pointer: coarse) { .zoom-button::after { content: ''; position: absolute; inset: -9px -3px; } }
 
-@layer components {
-  /* SMALL CAPITALS: section heads and quiet labels. */
-  .caps {
-    font-family: var(--font-sans);
-    font-size: 10.5px;
-    font-weight: 500;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    color: var(--ink-3);
-  }
-
-  /* SECTION HEAD: small capitals followed by a hairline to the edge. */
-  .section-head {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-  }
-  .section-head::after {
-    content: '';
-    flex: 1;
-    height: 1px;
-    background: var(--rule);
-  }
-
-  /* FIELDS */
-  .field {
-    width: 100%;
-    border: 1px solid var(--rule-strong);
-    border-radius: 2px;
-    background: var(--field);
-    color: var(--ink);
-    padding: 0.5rem 0.65rem;
-    font-family: var(--font-mono);
-    font-size: 13px;
-    line-height: 1.6;
-    transition: border-color 120ms ease, box-shadow 120ms ease;
-  }
-  .field:hover {
-    border-color: var(--ink-3);
-  }
-  .field:focus {
-    outline: none;
-    border-color: var(--ink);
-    box-shadow: 0 0 0 1px var(--ink);
-  }
-  /* A rule that doesn't parse: a heavier ink border, no colour needed. */
-  .field[aria-invalid='true'] {
-    border-color: var(--ink);
-    border-width: 1px 1px 1px 3px;
-    padding-left: calc(0.65rem - 2px);
-  }
-  textarea.field {
-    resize: vertical;
-    min-height: 7.5rem;
-  }
-
-  select.field {
-    appearance: none;
-    font-family: var(--font-serif);
-    font-size: 15px;
-    padding-right: 2rem;
-    cursor: pointer;
-    /* A small chevron drawn with two gradients, so it follows the ink. */
-    background-image:
-      linear-gradient(45deg, transparent 50%, var(--ink-2) 50%),
-      linear-gradient(135deg, var(--ink-2) 50%, transparent 50%);
-    background-position:
-      calc(100% - 15px) 52%,
-      calc(100% - 10.5px) 52%;
-    background-size: 4.5px 4.5px;
-    background-repeat: no-repeat;
-  }
-  select.field option {
-    font-family: var(--font-sans);
-  }
-
-  /* RANGE: a hairline track and a small ink bead. */
-  .range {
-    appearance: none;
-    -webkit-appearance: none;
-    width: 100%;
-    height: 20px;
-    background: transparent;
-    cursor: pointer;
-    margin: 0;
-  }
-  .range:focus {
-    outline: none;
-  }
-  .range::-webkit-slider-runnable-track {
-    height: 1px;
-    background: var(--rule-strong);
-  }
-  .range::-moz-range-track {
-    height: 1px;
-    background: var(--rule-strong);
-  }
-  .range::-moz-range-progress {
-    height: 1px;
-    background: var(--ink);
-  }
-  .range::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    width: 13px;
-    height: 13px;
-    margin-top: -6px;
-    border-radius: 50%;
-    background: var(--ink);
-    border: 2.5px solid var(--page);
-    box-shadow: 0 0 0 1px var(--ink);
-    transition: transform 120ms ease;
-  }
-  .range::-moz-range-thumb {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--ink);
-    border: 2.5px solid var(--page);
-    box-shadow: 0 0 0 1px var(--ink);
-    transition: transform 120ms ease;
-  }
-  .range:hover::-webkit-slider-thumb,
-  .range:active::-webkit-slider-thumb {
-    transform: scale(1.18);
-  }
-  .range:hover::-moz-range-thumb,
-  .range:active::-moz-range-thumb {
-    transform: scale(1.18);
-  }
-  .range:focus-visible::-webkit-slider-thumb {
-    box-shadow: 0 0 0 1px var(--ink), 0 0 0 4px var(--page), 0 0 0 5.5px var(--ink);
-  }
-  .range:focus-visible::-moz-range-thumb {
-    box-shadow: 0 0 0 1px var(--ink), 0 0 0 4px var(--page), 0 0 0 5.5px var(--ink);
-  }
-
-  /* BUTTONS */
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    height: 2.125rem;
-    padding: 0 0.9rem;
-    border: 1px solid var(--rule-strong);
-    border-radius: 2px;
-    background: transparent;
-    color: var(--ink);
-    font-family: var(--font-sans);
-    font-size: 13px;
-    letter-spacing: 0.01em;
-    white-space: nowrap;
-    cursor: pointer;
-    transition: border-color 120ms ease, background-color 120ms ease, color 120ms ease;
-  }
-  .btn:hover {
-    border-color: var(--ink);
-  }
-  .btn:active {
-    background: color-mix(in srgb, var(--ink) 6%, transparent);
-  }
-  .btn:disabled {
-    color: var(--ink-3);
-    border-color: var(--rule);
-    background: transparent;
-    cursor: default;
-  }
-  .btn[aria-busy='true'] {
-    cursor: progress;
-  }
-  .btn-solid {
-    background: var(--ink);
-    border-color: var(--ink);
-    color: var(--page);
-  }
-  .btn-solid:hover {
-    background: color-mix(in srgb, var(--ink) 86%, var(--page));
-  }
-  .btn-solid:active {
-    background: color-mix(in srgb, var(--ink) 78%, var(--page));
-  }
-
-  /* SEGMENTED CONTROL: the chosen option is filled with ink. */
-  .segmented {
-    display: inline-flex;
-    border: 1px solid var(--rule-strong);
-    border-radius: 2px;
-    padding: 2px;
-    gap: 2px;
-  }
-  .segmented > button {
-    height: 1.75rem;
-    padding: 0 0.7rem;
-    border-radius: 1px;
-    font-family: var(--font-sans);
-    font-size: 12.5px;
-    color: var(--ink-2);
-    cursor: pointer;
-    transition: background-color 120ms ease, color 120ms ease;
-  }
-  .segmented > button:hover {
-    color: var(--ink);
-    background: color-mix(in srgb, var(--ink) 6%, transparent);
-  }
-  .segmented > button[aria-pressed='true'] {
-    background: var(--ink);
-    color: var(--page);
-  }
-
-  /* THE SHEET: paper lifted off the page, with an etcher's plate mark. */
-  .sheet {
-    position: relative;
-    container: sheet / inline-size;
-    background: var(--plate-paper);
-    box-shadow: var(--sheet-shadow);
-  }
-  .plate-mark {
-    position: absolute;
-    inset: var(--plate-mark-top) var(--plate-mark-side) var(--plate-mark-bottom);
-    border: 1px solid var(--plate-mark);
-    pointer-events: none;
-    --top-left: calc(100% - var(--plate-gap-right) - var(--plate-gap-width));
-    -webkit-mask:
-      linear-gradient(#000 0 0) left top / var(--top-left) 2px no-repeat,
-      linear-gradient(#000 0 0) right top / var(--plate-gap-right) 2px no-repeat,
-      linear-gradient(#000 0 0) left bottom / 100% calc(100% - 2px) no-repeat;
-    mask:
-      linear-gradient(#000 0 0) left top / var(--top-left) 2px no-repeat,
-      linear-gradient(#000 0 0) right top / var(--plate-gap-right) 2px no-repeat,
-      linear-gradient(#000 0 0) left bottom / 100% calc(100% - 2px) no-repeat;
-  }
-
-  /* THE PLATE ITSELF: focusable, draggable once zoomed (the element sets
-     the cursor and touch-action as the zoom changes). */
-  tree-canvas {
-    display: block;
-    user-select: none;
-    -webkit-user-select: none;
-    -webkit-touch-callout: none;
-    -webkit-tap-highlight-color: transparent;
-    touch-action: pan-y;
-    outline: none;
-  }
-  tree-canvas:focus-visible {
-    outline: 1.5px solid var(--ink);
-    outline-offset: 3px;
-  }
-
-  /* ZOOM CARTOUCHE: − 100% + | FIT, set into the gap in the plate mark's
-     top edge, in the same pencil as the inscriptions. */
-  .zoom {
-    --pencil: color-mix(in srgb, var(--plate-ink) 55%, var(--plate-paper));
-    position: absolute;
-    top: calc(var(--plate-mark-top) - 10.5px);
-    right: calc(var(--plate-mark-side) + var(--plate-gap-right) + 8px);
-    height: 22px;
-    display: flex;
-    align-items: center;
-    gap: 1px;
-    color: var(--pencil);
-  }
-  .zoom-button {
-    position: relative;
-    display: inline-grid;
-    place-items: center;
-    height: 22px;
-    min-width: 22px;
-    padding: 0 4px;
-    border-radius: 2px;
-    color: inherit;
-    font-family: var(--font-sans);
-    font-size: 10px;
-    font-weight: 500;
-    letter-spacing: 0.16em;
-    text-indent: 0.16em;
-    text-transform: uppercase;
-    cursor: pointer;
-    transition: color 120ms ease, background-color 120ms ease;
-  }
-  .zoom-button:hover:not(:disabled) {
-    color: var(--plate-ink);
-    background: color-mix(in srgb, var(--plate-ink) 6%, transparent);
-  }
-  .zoom-button:active:not(:disabled) {
-    background: color-mix(in srgb, var(--plate-ink) 11%, transparent);
-  }
-  .zoom-button:disabled {
-    opacity: 0.38;
-    cursor: default;
-  }
-  .zoom-readout {
-    min-width: 3.4em;
-    text-align: center;
-    font-family: var(--font-serif);
-    font-style: italic;
-    font-size: 13px;
-    font-variant-numeric: tabular-nums;
-    color: color-mix(in srgb, var(--plate-ink) 70%, var(--plate-paper));
-  }
-  .zoom-rule {
-    width: 1px;
-    height: 11px;
-    margin: 0 5px;
-    background: var(--plate-mark);
-  }
-  /* Fingers need more room than the hairlines show. */
-  @media (pointer: coarse) {
-    .zoom-button::after {
-      content: '';
-      position: absolute;
-      inset: -9px -3px;
-    }
-  }
-  /* INSCRIPTIONS: pencil in the foot of the sheet. The title stays whole
-     in the middle; the source and the numbers share what is left and
-     give way with an ellipsis, and on a narrow sheet the source goes (it
-     is still on the print). */
-  .inscriptions {
-    position: absolute;
-    left: calc(var(--plate-mark-side) + 6px);
-    right: calc(var(--plate-mark-side) + 6px);
-    bottom: 12px;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-    column-gap: 1rem;
-    pointer-events: none;
-  }
-  .inscription {
-    font-family: var(--font-serif);
-    font-style: italic;
-    font-size: 13px;
-    color: color-mix(in srgb, var(--plate-ink) 55%, var(--plate-paper));
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .inscription-numbers {
-    text-align: right;
-  }
-  @container sheet (max-width: 26rem) {
-    .inscription-source {
-      visibility: hidden;
-    }
-  }
-
-  /* THE FOLIO: masthead, stage and rail. Narrow screens stack them, the
-     sheet straight after the title; wide ones hold the stage at the
-     window's height on the left while the rail (masthead, controls,
-     record) scrolls beside it. */
-  .folio {
-    --folio-top: 1.5rem;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: 'masthead' 'stage' 'lede' 'rail';
-    row-gap: 1.75rem;
-    max-width: 100rem;
-    margin-inline: auto;
-    padding: 1.25rem 1.25rem 3rem;
-  }
-  .masthead {
-    grid-area: masthead;
-    padding-bottom: 1.25rem;
-    border-bottom: 1px solid var(--rule);
-  }
-  .lede {
-    grid-area: lede;
-  }
-  .rail {
-    grid-area: rail;
-    min-width: 0;
-  }
-  @media (min-width: 640px) {
-    .folio {
-      row-gap: 2rem;
-      padding: 2rem 2.5rem 3rem;
-    }
-  }
-  @media (min-width: 1000px) and (min-aspect-ratio: 11/10) {
-    .folio {
-      grid-template-columns: minmax(0, 1fr) 20rem;
-      grid-template-rows: auto auto 1fr;
-      grid-template-areas: 'stage masthead' 'stage lede' 'stage rail';
-      column-gap: clamp(2.5rem, 4vw, 4rem);
-      row-gap: 0;
-      padding: var(--folio-top) 2.5rem 3rem;
-    }
-    .masthead {
-      padding: 0.5rem 0 0;
-      border-bottom: 0;
-    }
-    .lede {
-      margin: 1.25rem 0 2.5rem;
-      padding-bottom: 2rem;
-      border-bottom: 1px solid var(--rule);
-      font-size: 15px;
-    }
-  }
-
-  /* THE STAGE: the sheet as tall as the window allows (never under 32rem;
-     a shorter window scrolls), as wide as its orientation makes it, and
-     the transport under it at the same width. The sheet is sized so its
-     plate mark has the print's proportions, whatever the mark's inset:
-     --mark-ratio, height ÷ width, which the view sets on the stage from
-     render/sheet.ts (MARK_RATIO) for the orientation. A landscape
-     sheet is also held to the stage's width, and to 1100px. */
-  .stage {
-    grid-area: stage;
-    container: stage / inline-size;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 1rem;
-    --stage-h: clamp(32rem, 100svh - 14rem, 72rem);
-    --mark-x: calc(2 * var(--plate-mark-side));
-    --mark-y: calc(var(--plate-mark-top) + var(--plate-mark-bottom));
-    --sheet-h: min(var(--stage-h), (min(100cqw, 1100px) - var(--mark-x)) * var(--mark-ratio) + var(--mark-y));
-    --sheet-w: calc((var(--sheet-h) - var(--mark-y)) / var(--mark-ratio) + var(--mark-x));
-  }
-  .stage > .sheet {
-    flex: none;
-    width: var(--sheet-w);
-    height: var(--sheet-h);
-  }
-  .transport {
-    width: var(--sheet-w);
-    max-width: 100%;
-  }
-  @media (min-width: 1000px) and (min-aspect-ratio: 11/10) {
-    .stage {
-      align-self: start;
-      /* The window less the folio's top and bottom, the gap and the
-         transport. */
-      --stage-h: clamp(32rem, 100svh - 2 * var(--folio-top) - 1rem - 2.125rem, 72rem);
-    }
-  }
-  /* Held in place only while the whole stage fits the window; otherwise
-     it scrolls with the page, so nothing is ever out of reach. */
-  @media (min-width: 1000px) and (min-aspect-ratio: 11/10) and (min-height: 38.5rem) {
-    .stage {
-      position: sticky;
-      top: var(--folio-top);
-    }
-  }
-
-  /* DETAILS: small capitals with a drawn plus that turns into a minus. */
-  .disclosure > summary {
-    list-style: none;
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    cursor: pointer;
-    user-select: none;
-  }
-  .disclosure > summary::-webkit-details-marker {
-    display: none;
-  }
-  .disclosure > summary::before {
-    content: '';
-    width: 9px;
-    height: 9px;
-    background:
-      linear-gradient(var(--ink-2), var(--ink-2)) center / 9px 1px no-repeat,
-      linear-gradient(var(--ink-2), var(--ink-2)) center / 1px 9px no-repeat;
-    transition: transform 160ms ease;
-  }
-  .disclosure[open] > summary::before {
-    background: linear-gradient(var(--ink-2), var(--ink-2)) center / 9px 1px no-repeat;
-  }
-  .disclosure > summary:hover .caps {
-    color: var(--ink);
-  }
+@media (max-width: 800px) {
+  .garden { height: auto; min-height: 100svh; grid-template-columns: minmax(0, 1fr); grid-template-rows: 48px max(320px, calc(100svh - 290px)) 48px auto auto; grid-template-areas: 'top' 'stage' 'transport' 'rail' 'actions'; }
+  .topbar { gap: 16px; padding-left: 12px; }
+  .build-stats { display: none; }
+  .menu-toggle { display: inline-grid !important; width: 44px; height: 46px; margin-left: -16px; border-left: 1px solid var(--rule); font-size: 20px; }
+  .about-panel { right: -104px; }
+  .stage { border-right: 0; padding: 16px; }
+  .transport { border-right: 0; padding: 0 12px; gap: 12px; }
+  .rail { border-top: 1px solid var(--rule); overflow: visible; }
+  .menu-content { display: none; }
+  .garden[data-menu-open='true'] .menu-content { display: grid; }
+  .garden[data-menu-open='true'] .grammar { display: block; }
+  .style-options { border-bottom: 0; }
+  .actions { min-height: 48px; }
 }

@@ -8,8 +8,9 @@ import { type LSystemParams, paramsToSearch } from '../params/lsystem'
 import { findPreset } from '../params/presets'
 import { clampCamera, fitCamera, isFit, stepPan, stepZoom } from '../render/camera'
 import { orientationOf } from '../render/sheet'
-import { CopyLink, DownloadPrint, Generate, LoadExternal, NavigateInternal, NewSeed, ReplaceUrl } from './command'
+import { ApplyTheme, CopyLink, DownloadPrint, Generate, LoadExternal, NavigateInternal, NewSeed, ReplaceUrl } from './command'
 import { inscriptionsOf, printFileName } from './inscriptions'
+import { appearanceOf } from './appearance'
 import { Message } from './message'
 import type { Model } from './model'
 
@@ -185,13 +186,22 @@ export const update = (model: Model, message: Message) =>
       }),
     }),
 
+    ClickedToggleTheme: () => {
+      const theme = model.theme === 'Dark' ? 'Light' : 'Dark'
+      return { model: { ...model, theme }, commands: [ApplyTheme({ theme })] }
+    },
+    CompletedTheme: () => ({ model }),
+    ClickedToggleMenu: () => ({ model: { ...model, isMenuOpen: !model.isMenuOpen } }),
+
     // Repainting needs no new build, and the playback carries on as it was.
     SelectedRenderStyle: ({ renderStyle }) => ({
       model: modifyFields(model, { renderStyle: () => renderStyle }),
     }),
     SelectedSeason: ({ season }) => ({
-      model: modifyFields(model, { season: () => season }),
+      model: modifyFields(model, { season: () => season, isSeasonAutomatic: () => false }),
     }),
+
+    SelectedAutomaticSeason: () => ({ model: { ...model, isSeasonAutomatic: true } }),
 
     // The canvas has already clamped gestures to the plant; clamping again
     // here keeps the Model sane whatever sends them.
@@ -231,8 +241,8 @@ export const update = (model: Model, message: Message) =>
                     // prints the same way, even while the screen's turn
                     // waits for an edit or a zoom to end.
                     orientation: orientationOf(stats.aspect),
-                    style: model.renderStyle,
-                    season: model.season,
+                    style: appearanceOf(model).style,
+                    season: appearanceOf(model).season,
                     inscriptions: inscriptionsOf(model, true),
                     fileName: printFileName(model),
                   }),

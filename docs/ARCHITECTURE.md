@@ -5,7 +5,7 @@ export, generation in a worker, and zoom and pan. The README has the
 overview; [RENDERING.md](RENDERING.md) has the painting techniques and the
 lessons behind them.
 
-## The sheet and the folio layout
+## The sheet and the page layout
 
 **The sheet** (`render/sheet.ts`). Every plate is an A-series sheet,
 portrait, or landscape for a plant at least 1.1× wider than tall
@@ -16,13 +16,24 @@ and `plateMargins` keeps the same room inside the mark on both, head
 room by the mark's height and side room by its width. What you see is
 what you print, short of the print's wider paper margins.
 
-The page is a folio (`ui/view.ts`, `.folio` in styles.css). On a wide
-screen the stage holds the left of the page: the sheet as tall as the
-window allows (never under 32rem, a shorter window scrolls; a landscape
-sheet at most 1100px wide), with Play and the growth scrubber under it,
-held in place while the rail beside it scrolls (masthead, specimen, plate
-style, grammar, growth, link, print, record). On a narrow screen they
-stack, the sheet straight after the title.
+The page (`ui/view.ts`, `.garden` in styles.css) is a full-height grid:
+a 48px top bar, a plate beside a 320px control rail, and 48px playback
+and action bars. The rail scrolls independently; the sheet fits the stage
+using size-container units while keeping its plate-mark proportions.
+At 800px and below, the plate, playback and controls stack. The ⋯ button
+reveals the grammar, axiom, jitter, seed and actions.
+
+The icon in the top bar selects Light or Dark. `ui/theme.ts` persists the
+choice locally and applies `data-theme` to the document root; a first
+visit defaults to Dark. The canvas observes that attribute and rereads
+its CSS palette. Ink compositing follows CSS `color-scheme`, including
+when it differs from the operating system. Print palettes stay fixed.
+
+Leaf offers manual Spring, Summer and Autumn palettes, plus Auto.
+`ui/appearance.ts` derives Auto's seasonal leaves or blossom from the
+seed; screen and export use the same resolved appearance. Manual choices
+persist across seed changes. The interface font is locally bundled
+Instrument Sans; grammar and numeric readouts remain monospace.
 
 The sheet turns only at quiet moments, never under the finger. The Model
 keeps `orientation` and `isEditing`: a slider drag or typing in a field
@@ -36,7 +47,7 @@ fitted to the finished build.
 ## Print export
 
 **Print** (`render/print.ts`, Command `DownloadPrint`). A PNG at 300 dpi
-on A4, A3 or A2 (3508 × 4961 px for A3), portrait or landscape by the
+on A3 (3508 × 4961 px; the renderer also supports A4 and A2), portrait or landscape by the
 plant's shape (`orientationOf`, the same as the screen's sheet, taken
 from the plant so the same link always prints the same way, even while
 the screen's turn waits for a zoom to end), always ink on paper. It is the screen's renderer at a

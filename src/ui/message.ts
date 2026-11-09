@@ -44,8 +44,12 @@ export const Message = defineMessageUnion({
   TickedFrame: { deltaTimeMs: Schema.Number },
 
   // Appearance.
+  ClickedToggleTheme: {},
+  CompletedTheme: {},
+  ClickedToggleMenu: {},
   SelectedRenderStyle: { renderStyle: RenderStyle },
   SelectedSeason: { season: Season },
+  SelectedAutomaticSeason: {},
 
   // Zoom and pan. The canvas reports gestures: MovedCamera at most once a
   // frame while one is under way (left out of DevTools history, like

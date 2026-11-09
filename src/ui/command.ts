@@ -12,6 +12,7 @@ import { Season } from '../render/season'
 import { PlateOrientation, aspectOf } from '../render/sheet'
 import { Message } from './message'
 import { reportPrintBand } from './printProgress'
+import { Theme, applyTheme } from './theme'
 
 /** Grow the plant for `params` (in the generator's worker), put the
  *  geometry in the store under `buildId`, and report the stats back to
@@ -128,4 +129,10 @@ export const LoadExternal = Command.define('LoadExternal', {
   args: { href: Schema.String },
   messages: [Message.CompletedNavigate],
   execute: ({ href }) => load(href).pipe(Effect.as(Message.CompletedNavigate())),
+})
+
+export const ApplyTheme = Command.define('ApplyTheme', {
+  args: { theme: Theme },
+  messages: [Message.CompletedTheme],
+  execute: ({ theme }) => Effect.sync(() => applyTheme(theme)).pipe(Effect.as(Message.CompletedTheme())),
 })

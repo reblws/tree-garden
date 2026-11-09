@@ -47,7 +47,8 @@ across reloads, and the app regrows the plant when that happens
 - **Watch it grow.** Play, pause, replay or scrub. *Grow* extends every
   branch from the root at once, and the trunk thickens as the crown
   appears. *Trace* draws segments in the turtle's order.
-- **Choose a plate style** (table below) and, for `Leaf`, a season. Like
+- **Choose a plate style** (table below) and, for `Leaf`, a season or Auto.
+  Auto chooses a seasonal wash or blossom from the seed. Like
   the camera, these are viewing choices and stay out of the link.
 - **Zoom and pan** from the fitted view (100%) to 3200%. Scroll or pinch to
   zoom towards the pointer, drag or use two fingers to pan, and double-click
@@ -56,16 +57,15 @@ across reloads, and the app regrows the plant when that happens
   as you zoom in.
 - **Share a link.** The query string holds the grammar, the numbers and the
   seed, so the same link grows the same plant.
-- **Print** a PNG at 300 dpi on A4, A3 or A2, always ink on paper, with a
+- **Print A3** as a PNG at 300 dpi, always ink on paper, with a
   plate mark and pencilled inscriptions that include the seed. The same
   link, style, season and size give the same file, byte for byte.
-- **Light or dark** follows the system setting; dark mode is chalk on
-  charcoal.
+- **Light or dark** switches with the icon in the top bar and remembers
+  your choice. The first visit opens in dark mode.
 
 | Style     | What it paints |
 | --------- | -------------- |
-| `Leaf`    | ink brush plus a watercolour wash of leaves, in a Spring, Summer or Autumn palette |
-| `Blossom` | ink brush plus plum blossom, buds and fallen petals |
+| `Leaf`    | ink brush plus leaves in Spring, Summer or Autumn; Auto chooses a seasonal palette or plum blossom from the seed |
 | `Ink`     | the ink brush alone |
 | `Line`    | a plain technical pen in four weights (no ground, no seal) |
 
@@ -92,7 +92,7 @@ src/
   render/        <tree-canvas> (treeCanvas.ts), plate.ts, the painters, camera, sheet, print
   ui/            Foldkit app: model, messages, update, commands, subscriptions, view
   test/          determinism tests against a frozen reference copy of the old core
-  styles.css     Tailwind, the folio layout, the plate's CSS colours
+  styles.css     Tailwind, the full-height grid, the plate's CSS colours
 ```
 
 ```mermaid
@@ -190,3 +190,9 @@ with no task over ~40 ms.
 Foldkit is pre-1.0 and can break in minor releases, so `foldkit` and
 `effect` are pinned to exact versions (0.170.0 and 4.1.1). Upgrade them
 together, on purpose.
+
+The interface uses locally bundled Instrument Sans (regular and italic),
+with its Open Font License in `src/assets/fonts/OFL.txt`. On phones, the
+⋯ button reveals the grammar editor, jitter, seed, Share and Print actions.
+Hover over a control symbol for its explanation; About holds the credits
+and zoom gestures.

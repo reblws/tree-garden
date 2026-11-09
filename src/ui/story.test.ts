@@ -6,12 +6,15 @@ import { describe, expect, test } from 'vitest'
 import { defaultPreset, presets } from '../params/presets'
 import { type Camera, MAX_ZOOM, fitCamera } from '../render/camera'
 import { paramsToSearch } from '../params/lsystem'
-import { CopyLink, DownloadPrint, Generate, ReplaceUrl } from './command'
+import { ApplyTheme, CopyLink, DownloadPrint, Generate, ReplaceUrl } from './command'
 import { Message } from './message'
+import { appearanceOf } from './appearance'
 import type { BuildStats, Model } from './model'
 import { PLAYBACK_DURATION_MS, update } from './update'
 
 const initialModel: Model = {
+  theme: 'Dark',
+  isMenuOpen: false,
   params: { ...defaultPreset.params, seed: 'oak' },
   presetId: defaultPreset.id,
   latestBuildId: 1,
@@ -20,6 +23,7 @@ const initialModel: Model = {
   playback: { mode: 'Grow', progress: 1, isPlaying: false },
   renderStyle: 'Ink',
   season: 'Summer',
+  isSeasonAutomatic: true,
   camera: fitCamera,
   orientation: 'Portrait',
   isEditing: false,
@@ -46,6 +50,45 @@ const stats = (buildId: number, aspect = 0.68): BuildStats => ({
 const WIDE = 1.15
 
 describe('update', () => {
+  test('switching themes preserves the plant and playback and persists the choice', () => {
+    story(
+      update,
+      given(initialModel),
+      message(Message.ClickedToggleTheme()),
+      model(model => {
+        expect(model.theme).toBe('Light')
+        expect(model.params).toEqual(initialModel.params)
+        expect(model.playback).toEqual(initialModel.playback)
+        expect(model.latestBuildId).toBe(initialModel.latestBuildId)
+      }),
+      Command.expectExact(ApplyTheme({ theme: 'Light' })),
+      Command.resolve(ApplyTheme, Message.CompletedTheme()),
+      message(Message.ClickedToggleTheme()),
+      model(model => expect(model.theme).toBe('Dark')),
+      Command.expectExact(ApplyTheme({ theme: 'Dark' })),
+      Command.resolve(ApplyTheme, Message.CompletedTheme()),
+    )
+  })
+
+  test('a manual season overrides seed-chosen blossom, and Auto restores it', () => {
+    const leaf = { ...initialModel, renderStyle: 'Leaf' as const, params: { ...initialModel.params, seed: 'ash' } }
+    expect(appearanceOf(leaf).style).toBe('Blossom')
+    story(
+      update,
+      given(leaf),
+      message(Message.SelectedSeason({ season: 'Autumn' })),
+      model(model => {
+        expect(appearanceOf(model)).toEqual({ style: 'Leaf', season: 'Autumn' })
+        expect(model.params).toEqual(leaf.params)
+        expect(model.latestBuildId).toBe(leaf.latestBuildId)
+      }),
+      Command.expectNone(),
+      message(Message.SelectedAutomaticSeason()),
+      model(model => expect(appearanceOf(model).style).toBe('Blossom')),
+      Command.expectNone(),
+    )
+  })
+
   test('dragging a slider regenerates without touching the URL; releasing writes it', () => {
     story(
       update,

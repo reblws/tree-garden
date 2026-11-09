@@ -1,6 +1,6 @@
 /**
  * The plate's colours. The CSS owns them (`--plate-paper`, `--plate-ink`,
- * `--plate-highlight` in styles.css, switched by prefers-color-scheme), and
+ * `--plate-highlight` in styles.css, switched by the theme control), and
  * the canvas reads them back so the painting always matches the page.
  */
 
@@ -59,9 +59,11 @@ export const prefersDark = (): boolean =>
   typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches
 
 export const readPalette = (element: Element): Palette => {
-  const isDark = prefersDark()
-  const defaults = isDark ? DARK : LIGHT
   const style = getComputedStyle(element)
+  // CSS is the source of truth, including an explicit theme that differs
+  // from the operating system. Blending and bark lighting must agree.
+  const isDark = style.colorScheme === 'dark' || (style.colorScheme !== 'light' && prefersDark())
+  const defaults = isDark ? DARK : LIGHT
   return buildPalette(
     isDark,
     parseHex(style.getPropertyValue('--plate-paper'), defaults.paper),

@@ -264,6 +264,8 @@ class TreeCanvasElement extends HTMLElement {
     return this.#gpu ?? undefined
   }
 
+  #themeObserver = new MutationObserver(() => this.#onColorScheme())
+
   connectedCallback() {
     this.#canvas.style.display = 'block'
     this.#canvas.style.width = '100%'
@@ -283,6 +285,7 @@ class TreeCanvasElement extends HTMLElement {
     this.#resizeObserver.observe(this)
     this.#colorScheme ??= matchMedia('(prefers-color-scheme: dark)')
     this.#colorScheme.addEventListener('change', this.#onColorScheme)
+    this.#themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
     this.addEventListener('wheel', this.#onWheel, { passive: false })
     this.addEventListener('pointerdown', this.#onPointerDown)
     this.addEventListener('pointermove', this.#onPointerMove)
@@ -298,6 +301,7 @@ class TreeCanvasElement extends HTMLElement {
 
   disconnectedCallback() {
     this.#resizeObserver?.disconnect()
+    this.#themeObserver.disconnect()
     this.#colorScheme?.removeEventListener('change', this.#onColorScheme)
     this.removeEventListener('wheel', this.#onWheel)
     this.removeEventListener('pointerdown', this.#onPointerDown)
@@ -327,6 +331,7 @@ class TreeCanvasElement extends HTMLElement {
   }
 
   #onColorScheme = () => {
+    this.#cancelJob()
     this.#palette = undefined
     this.#schedule()
   }
